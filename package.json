@@ -1,0 +1,151 @@
+{
+	"name": "vstools",
+	"displayName": "Registry Editor",
+	"description": "Support for Registry inside Code",
+	"version": "0.0.1",
+	"publisher": "adrianstephens",
+	"repository": "https://github.com/adrianstephens/vscode_registry",
+	"engines": {
+		"vscode": "^1.74.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+	],
+	"main": "./out/extension.js",
+	"contributes": {
+		"views": {
+			"explorer": [
+				{
+					"id": "regedit-view",
+					"name": "Registry",
+					"when": "regedit.open"
+				}
+			]
+
+		},
+		"commands": [
+			{
+				"command": "regedit.open",
+				"title": "Open Registry",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.delete",
+				"title": "Delete",
+				"icon": "$(trash)",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.rename",
+				"title": "Rename",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.createKey",
+				"title": "New Key",
+				"icon": "$(new-folder)",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.createValue",
+				"title": "New Value",
+				"icon": "$(new-file)",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.editValue",
+				"title": "Edit Value",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.export",
+				"title": "Export",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.import",
+				"title": "Load into Registry",
+				"icon": "$(cloud-upload)",
+				"category": "RegEdit"
+			}
+
+		],
+		"keybindings": [
+			{
+				"command": "regedit.rename",
+				"when": "focusedView == regedit-view",
+				"key": "f2",
+				"mac": "f2"
+			},
+			{
+				"command": "regedit.delete",
+				"when": "focusedView == regedit-view",
+				"key": "delete",
+				"mac": "delete"
+			},
+			{
+				"command": "regedit.createValue",
+				"when": "focusedView == regedit-view",
+				"key": "ctrl+shift+a",
+				"mac": "cmd+shift+a"
+			},
+			{
+				"command": "regedit.createKey",
+				"when": "focusedView == regedit-view",
+				"key": "ctrl+shift+f",
+				"mac": "cmd+shift+f"
+			}
+
+		],
+		"menus": {
+			"view/item/context": [
+				{
+					"command": "regedit.delete",
+					"when": "view == regedit-view",
+					"group": "edit"
+				},
+				{
+					"command": "regedit.rename",
+					"when": "view == regedit-view",
+					"group": "edit"
+				},
+				{
+					"command": "regedit.createValue",
+					"when": "view == regedit-view && viewItem == 'key'",
+					"group": "modify"
+				},
+				{
+					"command": "regedit.createKey",
+					"when": "view == regedit-view && viewItem == 'key'",
+					"group": "edit"
+				},
+				{
+					"command": "regedit.export",
+					"when": "view == regedit-view && viewItem == 'key'",
+					"group": "edit"
+				},
+				{
+					"command": "regedit.editValue",
+					"when": "view == regedit-view && viewItem == 'value'",
+					"group": "edit"
+				}
+			]
+		}
+	},
+	"scripts": {
+		"vscode:prepublish": "npm run compile",
+		"compile": "tsc -p ./",
+		"lint": "eslint \"src/**/*.ts\"",
+		"watch": "tsc -watch -p ./"
+	},
+	"devDependencies": {
+		"@types/node": "^18",
+		"@types/vscode": "^1.73.0",
+		"@typescript-eslint/eslint-plugin": "^7.14.0",
+		"@typescript-eslint/parser": "^7.14.0",
+		"eslint": "^8.26.0",
+		"typescript": "^5.5.2"
+	}
+}
