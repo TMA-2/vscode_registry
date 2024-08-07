@@ -45,18 +45,6 @@ abstract class TreeItem extends vscode.TreeItem {
 			this.resourceUri = Uri.file(path);
 	}
 
-	public get label_text() {
-		return typeof(this.label) == 'string' ? this.label : this.label?.label;
-	}
-
-	public collapse(): void {
-		if (this.collapsibleState !== TreeItemCollapsibleState.None) {
-			if (this.children) 
-				this.children.forEach(c => c.collapse());
-			this.collapsibleState = TreeItemCollapsibleState.Collapsed;
-		}
-	}
-
 	public clearChildren(): void {
 		if (this.children)
 			this.children.forEach(c => c.clearChildren());
@@ -125,8 +113,9 @@ async function rename(key: registry.Key, newName: string, value?: string) : Prom
 }
 
 export class RegEditProvider implements vscode.TreeDataProvider<TreeItem> {
-	private treeView: 		vscode.TreeView<TreeItem>;
-	private children: 		TreeItem[]	= [];
+	//private treeView: 		vscode.TreeView<TreeItem>;
+	private children: 	TreeItem[]	= [];
+	public	selection:	TreeItem[] = [];
 
 	private _onDidChangeTreeData = new vscode.EventEmitter<TreeItem | undefined | null | void>();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -143,27 +132,9 @@ export class RegEditProvider implements vscode.TreeDataProvider<TreeItem> {
 		}
 		this._onDidChangeTreeData.fire(node);
 	}
-	public async collapse(node: TreeItem) {
-		node.collapsibleState = TreeItemCollapsibleState.Collapsed;
-		this.recreate(node);
-	}
 
 	public getTreeItem(element: TreeItem): vscode.TreeItem {
 		return element;
-	}
-
-	public getRootByContext(element: TreeItem, type : string) {
-		let i : TreeItem | null = element;
-		while (i && !(i.contextValue != type))
-			i = i.parent;
-		return i;
-	}
-
-	public getRootByClass(element: TreeItem, type: any) {
-		let i : TreeItem | null = element;
-		while (i && !(i instanceof type))
-			i = i.parent;
-		return i;
 	}
 
 	public getChildren(element?: TreeItem) {//}: Promise<TreeItem[]> | undefined {
@@ -190,19 +161,9 @@ export class RegEditProvider implements vscode.TreeDataProvider<TreeItem> {
 		return element.parent;
 	}
 
-	public getSelectedItems(): readonly TreeItem[] {
-		return this.treeView.selection;
-	}
-
 	constructor() {
-		const options = {
-			treeDataProvider: this,
-			canSelectMany: true,
-			showCollapseAll: true
-		};
-
-		this.treeView = vscode.window.createTreeView('regedit-view', options);
-
+		vscode.window.registerTreeDataProvider('regedit-view', this);
+		vscode.workspace.registerFileSystemProvider('reg', new RegFS(this), { isCaseSensitive: true });
 	}
 }
 
@@ -249,177 +210,175 @@ class RegFS implements vscode.FileSystemProvider {
 //	main extension entry point
 //-----------------------------------------------------------------------------
 
-let _regedit: RegEditProvider|undefined;
-
 export function activate(context: vscode.ExtensionContext) {
+	
 	function registerCommand(command: string, callback: (...args: any[]) => any, thisArg?: any) {
 		const disposable = vscode.commands.registerCommand(command, callback);
 		context.subscriptions.push(disposable);
 	}
 
-	registerCommand('regedit.open', () => {
-		if (!_regedit) {
-			vscode.commands.executeCommand('setContext', 'regedit.open', true);
-			_regedit = new RegEditProvider;
+	const regedit = new RegEditProvider;
+
+	registerCommand("regedit.editValue",	async (item?: TreeItem, data?: string) => {
+		if (item instanceof ValueTreeItem) {
+			const old_data = item.data;
+			if (!data) {
+				data = await vscode.window.showInputBox({prompt: 'Enter the new value', value: registry.data_to_string(old_data)});
+				if (!data)
+					return;
+			}
+			const parent	= item.parent as KeyTreeItem;
+			if (await parent.key.setValue(item.name, registry.string_to_data(registry.value_type(old_data), data)))
+				regedit?.recreate(parent);
 		}
-		const regedit = _regedit;
+	});
+		
+	registerCommand("regedit.createKey",	async (item: string|TreeItem, name?: string) => {
+		if (typeof(item) == 'string')
+			return registry.getKey(item).create();
 
-		vscode.workspace.registerFileSystemProvider('reg', new RegFS(regedit), { isCaseSensitive: true });
-			
-		registerCommand("regedit.createKey",	async (item?: TreeItem, name?: string) => {
-			if (!item)
-				item = regedit.getSelectedItems()[0];
+		if (item instanceof KeyTreeItem) {
+			if (!name) {
+				name = await vscode.window.showInputBox({prompt: 'Enter the name of the new Key'});
+				if (!name)
+					return;
+			}
+
+			if (await item.key[name].create())
+				regedit?.recreate(item);
+		}
+	});
+
+	registerCommand("regedit.setValue",	async (item: string|TreeItem, name?: string, type?: string, data?:string) => {
+		if (typeof(item) == 'string')
+			return registry.getKey(item).setValue(item, registry.string_to_data(type||'REG_SZ', data||''));
+
+		if (item instanceof KeyTreeItem) {
+			if (!name) {
+				name = await vscode.window.showInputBox({prompt: 'Enter the name of the new Value'});
+				if (!name)
+					return;
+			}
+
+			if (!type) {
+				const items: vscode.QuickPickItem[] = [
+					{ label: 'REG_SZ'		},
+					{ label: 'REG_MULTI_SZ'	},
+					{ label: 'REG_EXPAND_SZ'},
+					{ label: 'REG_DWORD'	},
+					{ label: 'REG_QWORD'	},
+					{ label: 'REG_BINARY'	},
+					{ label: 'REG_NONE'		},
+				];
+				
+				const selectedItem = await vscode.window.showQuickPick(items, {placeHolder: 'Select the value type'});
+				if (!selectedItem)
+					return;
+				type = selectedItem.label;
+			}
+
+			if (!data) {
+				switch (type) {
+					case 'REG_EXPAND_SZ':
+					case 'REG_SZ':			data = '<new>'; break;
+					case 'REG_MULTI_SZ':	data = '<new>;<new>'; break;
+					case 'REG_DWORD':
+					case 'REG_QWORD':
+					case 'REG_BINARY':		data = '0'; break;
+					default:				break;
+				}
+
+				data = await vscode.window.showInputBox({prompt: 'Enter the initial value', value: data});
+				if (!data)
+					return;
+			}
+
+			if (await item.key.setValue(name, registry.string_to_data(type, data)))
+				regedit.recreate(item);
+		}
+	});
+
+	registerCommand("regedit.delete",			async (item: string|TreeItem) => {
+		if (typeof(item) == 'string') {
+			const key = await registry.getKey(path.dirname(item));
+			const base = path.basename(item);
+			if (base in key)
+				delete key[base];
+			else
+				key.deleteValue(base);
+			return;
+		}
+
+		if (await vscode.window.showInformationMessage('Are you sure you want to delete ?', { modal: true }, 'Yes', 'No') !== 'Yes')
+			return;
+
+		if (item instanceof KeyTreeItem) {
+			const parent	= item.parent as KeyTreeItem;
+			if (await item.key.destroy())
+				regedit.recreate(parent);
+
+		} else if (item instanceof ValueTreeItem) {
+			const parent	= item.parent as KeyTreeItem;
+			if (await parent.key.deleteValue(item.name))
+				regedit.recreate(parent);
+		}
+	});
+
+	registerCommand("regedit.rename",			async (item: string|TreeItem, newname?: string) => {
+		let key:registry.Key;
+		let name:string;
+		let value:string = '';
+		let parent:KeyTreeItem| undefined;
+
+		if (typeof(item) == 'string') {
+			key		= await registry.getKey(path.dirname(item));
+			name	= path.basename(item);
+			if (name in key) {
+				key		= key[value];
+				value	= '';
+			} else {
+				value	= name;
+			}
+		} else {
+			parent	= item?.parent as KeyTreeItem;
 			if (item instanceof KeyTreeItem) {
-				if (!name) {
-					name = await vscode.window.showInputBox({prompt: 'Enter the name of the new Key'});
-					if (!name)
-						return;
-				}
-
-				if (await item.key[name].create())
-					regedit.recreate(item);
-			}
-		});
-
-		registerCommand("regedit.createValue",	async (item?: TreeItem, name?: string, type?: string, data?:string) => {
-			if (!item)
-				item = regedit.getSelectedItems()[0];
-			if (item instanceof KeyTreeItem) {
-				if (!name) {
-					name = await vscode.window.showInputBox({prompt: 'Enter the name of the new Value'});
-					if (!name)
-						return;
-				}
-
-				if (!type) {
-					const items: vscode.QuickPickItem[] = [
-						{ label: 'REG_SZ'		},
-						{ label: 'REG_MULTI_SZ'	},
-						{ label: 'REG_EXPAND_SZ'},
-						{ label: 'REG_DWORD'	},
-						{ label: 'REG_QWORD'	},
-						{ label: 'REG_BINARY'	},
-						{ label: 'REG_NONE'		},
-					];
-					
-					const selectedItem = await vscode.window.showQuickPick(items, {placeHolder: 'Select the value type'});
-					if (!selectedItem)
-						return;
-					type = selectedItem.label;
-				}
-
-				if (!data) {
-					switch (type) {
-						case 'REG_EXPAND_SZ':
-						case 'REG_SZ':			data = '<new>'; break;
-						case 'REG_MULTI_SZ':	data = '<new>;<new>'; break;
-						case 'REG_DWORD':
-						case 'REG_QWORD':
-						case 'REG_BINARY':		data = '0'; break;
-						default:				break;
-					}
-
-					data = await vscode.window.showInputBox({prompt: 'Enter the initial value', value: data});
-					if (!data)
-						return;
-				}
-
-				if (await item.key.setValue(name, registry.string_to_data(type, data)))
-					regedit.recreate(item);
-			}
-		});
-
-		registerCommand("regedit.editValue",	async (item?: TreeItem, data?: string) => {
-			if (!item)
-				item = regedit.getSelectedItems()[0];
-			if (item instanceof ValueTreeItem) {
-				const old_data = item.data;
-				if (!data) {
-					data = await vscode.window.showInputBox({prompt: 'Enter the new value', value: registry.data_to_string(old_data)});
-					if (!data)
-						return;
-				}
-				const parent	= item.parent as KeyTreeItem;
-				if (await parent.key.setValue(item.name, registry.string_to_data(registry.value_type(old_data), data)))
-					regedit.recreate(parent);
-			}
-		});
-
-
-		registerCommand("regedit.delete",			async (item?: TreeItem) => {
-			if (!item) {
-				item = regedit.getSelectedItems()[0];
-			} else if (await vscode.window.showInformationMessage('Are you sure you want to delete ?', { modal: true }, 'Yes', 'No') !== 'Yes') {
+				key 	= item.key;
+				name 	= key.name;
+			} else if (item instanceof ValueTreeItem) {
+				key 	= parent.key;
+				name	= item.name as string;
+				value	= name;
+			} else {
 				return;
 			}
+		}
 
-			const parent	= item.parent as KeyTreeItem;
+		if (!newname) {
+			newname = await vscode.window.showInputBox({
+				value: name,
+				prompt: 'Enter the new name',
+			});
+			if (!newname)
+				return;
+		}
 
-			if (item instanceof KeyTreeItem) {
-				if (await item.key.destroy())
-					regedit.recreate(parent);
+		await rename(key, newname, value).then(() => regedit?.recreate(parent));		
+	});
 
-			} else if (item instanceof ValueTreeItem) {
-				if (await parent.key.deleteValue(item.name))
-					regedit.recreate(parent);
-			}
-		});
+	registerCommand("regedit.export",			async (item: string|TreeItem, file?: string) => {
+		if (typeof(item) == 'string')
+			return file && await registry.getKey(item).export(file);
 
-		registerCommand("regedit.rename",			async (item?: TreeItem) => {
-			if (!item)
-				item = regedit.getSelectedItems()[0];
+		if (item instanceof KeyTreeItem) {
+			const uri = vscode.Uri.parse(`reg:/${item.key}`);
+			const document = await vscode.workspace.openTextDocument(uri);
 
-			if (item instanceof KeyTreeItem) {
-				const newName = await vscode.window.showInputBox({
-					value: item.label as string,
-					prompt: 'Enter the new name',
-				});
-				if (newName) {
-					await rename(item.key, newName).then(() => {
-						const parent	= item.parent as KeyTreeItem;
-						regedit.recreate(parent);
-					});		
-				}
+			// Show the document in the active editor column
+			await vscode.window.showTextDocument(document, {viewColumn: vscode.ViewColumn.Active});
+		}
+	});
 
-			} else if (item instanceof ValueTreeItem) {
-				const newName = await vscode.window.showInputBox({
-					value: item.name as string,
-					prompt: 'Enter the new name',
-				});
-				if (newName) {
-					const parent	= item.parent as KeyTreeItem;
-					await rename(parent.key, newName, item.name).then(() => {
-						regedit.recreate(parent);
-					});
-				}
-			}
-		});
-		registerCommand("regedit.export",			async (item?: TreeItem) => {
-			if (!item)
-				item = regedit.getSelectedItems()[0];
-
-			if (item instanceof KeyTreeItem) {
-				const uri = vscode.Uri.parse(`reg:/${item.key}`);
-				const document = await vscode.workspace.openTextDocument(uri);
-
-				// Show the document in the active editor column
-				await vscode.window.showTextDocument(document, {viewColumn: vscode.ViewColumn.Active});
-			}
-		});
-
-		registerCommand("regedit.import",			async (item?: any) => {
-			const editor = vscode.window.activeTextEditor;
-			if (editor) {
-				const document = editor.document;
-				const text = document.getText();
-				console.log(text);
-				document.save();
-
-				const file = path.join(os.tmpdir(), 'temp.reg');
-				await vscode.workspace.fs.writeFile(vscode.Uri.file(file), Buffer.from(text, 'utf8'));
-				registry.importreg(file).then(() => regedit.recreate());
-		
-			}
-		});
+	registerCommand("regedit.import",			async (file: string) => {
+		registry.importreg(file).then(() => regedit?.recreate());
 	});
 }

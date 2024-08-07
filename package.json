@@ -19,18 +19,12 @@
 			"explorer": [
 				{
 					"id": "regedit-view",
-					"name": "Registry",
-					"when": "regedit.open"
+					"name": "Registry"
 				}
 			]
 
 		},
 		"commands": [
-			{
-				"command": "regedit.open",
-				"title": "Open Registry",
-				"category": "RegEdit"
-			},
 			{
 				"command": "regedit.delete",
 				"title": "Delete",
@@ -49,7 +43,7 @@
 				"category": "RegEdit"
 			},
 			{
-				"command": "regedit.createValue",
+				"command": "regedit.setValue",
 				"title": "New Value",
 				"icon": "$(new-file)",
 				"category": "RegEdit"
@@ -67,7 +61,6 @@
 			{
 				"command": "regedit.import",
 				"title": "Load into Registry",
-				"icon": "$(cloud-upload)",
 				"category": "RegEdit"
 			}
 
@@ -86,7 +79,7 @@
 				"mac": "delete"
 			},
 			{
-				"command": "regedit.createValue",
+				"command": "regedit.setValue",
 				"when": "focusedView == regedit-view",
 				"key": "ctrl+shift+a",
 				"mac": "cmd+shift+a"
@@ -112,7 +105,7 @@
 					"group": "edit"
 				},
 				{
-					"command": "regedit.createValue",
+					"command": "regedit.setValue",
 					"when": "view == regedit-view && viewItem == 'key'",
 					"group": "modify"
 				},
