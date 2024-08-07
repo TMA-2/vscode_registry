@@ -1,9 +1,10 @@
 {
-	"name": "vstools",
+	"name": "regedit-explorer",
 	"displayName": "Registry Editor",
-	"description": "Support for Registry inside Code",
+	"description": "A Registry Editor for VSCode",
+	"icon": "assets/icon.png",
 	"version": "0.0.1",
-	"publisher": "adrianstephens",
+	"publisher": "isopodlabs",
 	"repository": "https://github.com/adrianstephens/vscode_registry",
 	"engines": {
 		"vscode": "^1.74.0"
@@ -11,7 +12,15 @@
 	"categories": [
 		"Other"
 	],
+	"keywords": [
+		"Registry"
+	],
 	"activationEvents": [
+	],
+	"files": [
+		"out/*",
+		"assets/*",
+		"LICENSE.txt"
 	],
 	"main": "./out/extension.js",
 	"contributes": {
@@ -22,7 +31,6 @@
 					"name": "Registry"
 				}
 			]
-
 		},
 		"commands": [
 			{
