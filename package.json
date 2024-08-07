@@ -3,7 +3,7 @@
 	"displayName": "Registry Editor",
 	"description": "A Registry Editor for VSCode",
 	"icon": "assets/icon.png",
-	"version": "0.0.1",
+	"version": "0.1.0",
 	"publisher": "isopodlabs",
 	"repository": "https://github.com/adrianstephens/vscode_registry",
 	"engines": {
@@ -15,8 +15,7 @@
 	"keywords": [
 		"Registry"
 	],
-	"activationEvents": [
-	],
+	"activationEvents": [],
 	"files": [
 		"out/*",
 		"assets/*",
@@ -71,7 +70,6 @@
 				"title": "Load into Registry",
 				"category": "RegEdit"
 			}
-
 		],
 		"keybindings": [
 			{
@@ -98,7 +96,6 @@
 				"key": "ctrl+shift+f",
 				"mac": "cmd+shift+f"
 			}
-
 		],
 		"menus": {
 			"view/item/context": [
