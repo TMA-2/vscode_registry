@@ -191,7 +191,8 @@
 		"vscode:prepublish": "npm run compile",
 		"compile": "tsc -p ./",
 		"lint": "eslint \"src/**/*.ts\"",
-		"watch": "tsc -watch -p ./"
+		"watch": "tsc -watch -p ./",
+		"publish": "vsce publish minor"
 	},
 	"devDependencies": {
 		"@types/node": "^18",
