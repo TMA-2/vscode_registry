@@ -15,7 +15,9 @@
 	"keywords": [
 		"Registry"
 	],
-	"activationEvents": [],
+	"activationEvents": [
+		"onFileSystem:reg"
+	],
 	"files": [
 		"out/*",
 		"assets/*",
@@ -32,6 +34,18 @@
 			]
 		},
 		"commands": [
+			{
+				"command": "regedit.copy",
+				"title": "Copy",
+				"icon": "$(copy)",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.copy_strict",
+				"title": "Copy (strict)",
+				"icon": "$(copy)",
+				"category": "RegEdit"
+			},
 			{
 				"command": "regedit.delete",
 				"title": "Delete",
@@ -56,8 +70,8 @@
 				"category": "RegEdit"
 			},
 			{
-				"command": "regedit.editValue",
-				"title": "Edit Value",
+				"command": "regedit.edit",
+				"title": "Edit",
 				"category": "RegEdit"
 			},
 			{
@@ -72,6 +86,12 @@
 			}
 		],
 		"keybindings": [
+			{
+				"command": "regedit.copy",
+				"when": "focusedView == regedit-view",
+				"key": "ctrl+c",
+				"mac": "cmd+c"
+			},
 			{
 				"command": "regedit.rename",
 				"when": "focusedView == regedit-view",
@@ -100,6 +120,17 @@
 		"menus": {
 			"view/item/context": [
 				{
+					"command": "regedit.edit",
+					"when": "view == regedit-view",
+					"group": "edit"
+				},
+				{
+					"command": "regedit.copy",
+					"when": "view == regedit-view",
+					"alt": "regedit.copy_strict",
+					"group": "edit"
+				},
+				{
 					"command": "regedit.delete",
 					"when": "view == regedit-view",
 					"group": "edit"
@@ -122,11 +153,6 @@
 				{
 					"command": "regedit.export",
 					"when": "view == regedit-view && viewItem == 'key'",
-					"group": "edit"
-				},
-				{
-					"command": "regedit.editValue",
-					"when": "view == regedit-view && viewItem == 'value'",
 					"group": "edit"
 				}
 			]
