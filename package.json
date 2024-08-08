@@ -81,9 +81,21 @@
 			},
 			{
 				"command": "regedit.import",
-				"title": "Load into Registry",
+				"title": "Import into Registry...",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.addhost",
+				"title": "Add remote machine...",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.refresh",
+				"title": "Refresh",
+				"icon": "$(refresh)",
 				"category": "RegEdit"
 			}
+
 		],
 		"keybindings": [
 			{
@@ -118,15 +130,32 @@
 			}
 		],
 		"menus": {
-			"view/item/context": [
+			"view/title": [
 				{
-					"command": "regedit.edit",
+					"command": "regedit.refresh",
+					"when": "view == regedit-view",
+					"group": "navigation"
+				},
+				{
+					"command": "regedit.import",
 					"when": "view == regedit-view",
 					"group": "edit"
 				},
 				{
-					"command": "regedit.copy",
+					"command": "regedit.addhost",
 					"when": "view == regedit-view",
+					"group": "edit"
+				}
+			],
+			"view/item/context": [
+				{
+					"command": "regedit.edit",
+					"when": "view == regedit-view && viewItem != 'host'",
+					"group": "edit"
+				},
+				{
+					"command": "regedit.copy",
+					"when": "view == regedit-view && viewItem != 'host'",
 					"alt": "regedit.copy_strict",
 					"group": "edit"
 				},
@@ -137,7 +166,7 @@
 				},
 				{
 					"command": "regedit.rename",
-					"when": "view == regedit-view",
+					"when": "view == regedit-view && viewItem != 'host'",
 					"group": "edit"
 				},
 				{

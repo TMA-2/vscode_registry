@@ -7,12 +7,15 @@ const KEY_PATTERN   = /(\\[a-zA-Z0-9_\s]+)*/;
 const PATH_PATTERN	= /^(HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|HKEY_USERS|HKEY_CURRENT_CONFIG).*\\(.*)$/;
 const ITEM_PATTERN  = /^(.*)\s(REG_SZ|REG_MULTI_SZ|REG_EXPAND_SZ|REG_DWORD|REG_QWORD|REG_BINARY|REG_NONE)\s+([^\s].*)$/;
 
-export const HIVES	= HIVES_LONG;
+const hosts32 : Record<string, KeyImp> = {};
+const hosts64 : Record<string, KeyImp> = {};
+
+export const HIVES			= HIVES_LONG;
+export const REMOTE_HIVES	= HIVES.slice(0, 2);
 
 export interface Type {
-	name: string;
-	index: number;
-	parse: (s:string)=>Data;
+	name:	string;
+	parse:	(s:string)=>Data;
 }
 
 export interface Data {
@@ -21,43 +24,48 @@ export interface Data {
 	constructor: {name:string};
 }
 
-function parse_hex(s:string) {
+function hex_to_bytes(s: string) {
 	return new Uint8Array(Array.from({length: Math.ceil(s.length / 2)}, (_, i) => s.slice(i * 2, (i + 1) * 2)).map(i => parseInt(i, 16)));
+}
+function bytes_to_hex(value: Uint8Array) {
+	return `${Array.from(value).map(i => i.toString(16).padStart(2, '0')).join(',')}`;
+}
+function string_to_bytes(buffer:ArrayBuffer, offset: number, value: string) {
+	const a = new DataView(buffer, offset);
+	for (let i = 0; i < value.length; i++)
+		a.setUint16(i * 2, value.charCodeAt(i), true);
+	a.setUint16(value.length * 2, 0, true);
+	return offset + (value.length + 1) * 2;
+}
+
+function bytes_to_string(buffer: ArrayBuffer) {
+	const s = new TextDecoder('utf-16le').decode(buffer);
+	return s.endsWith('\0') ? s.slice(0, -1) : s;
 }
 
 class NONE implements Data {
-	static index = 0;
-	static parse(s:string) { return new NONE(parse_hex(s)); }
-
+	static parse(s:string) { return new NONE(hex_to_bytes(s)); }
 	constructor(public value: Uint8Array) {}
 	get raw() { return this.value; }
 }
 
 class BINARY extends NONE {
-	static index = 3;
-	static parse(s:string) { return new BINARY(parse_hex(s)); }
+	static parse(s:string) { return new BINARY(hex_to_bytes(s)); }
 }
 class LINK extends NONE {
-	static index = 6;
-	static parse(s:string) { return new LINK(parse_hex(s)); }
+	static parse(s:string) { return new LINK(hex_to_bytes(s)); }
 }
 class RESOURCE_LIST extends NONE {
-	static index = 8;
-	static parse(s:string) { return new RESOURCE_LIST(parse_hex(s)); }
+	static parse(s:string) { return new RESOURCE_LIST(hex_to_bytes(s)); }
 }
 class FULL_RESOURCE_DESCRIPTOR extends NONE {
-	static index = 9;
-	static parse(s:string) { return new FULL_RESOURCE_DESCRIPTOR(parse_hex(s)); }
+	static parse(s:string) { return new FULL_RESOURCE_DESCRIPTOR(hex_to_bytes(s)); }
 }
 class RESOURCE_REQUIREMENTS_LIST extends NONE {
-	static index = 10;
-	static parse(s:string) { return new RESOURCE_REQUIREMENTS_LIST(parse_hex(s)); }
+	static parse(s:string) { return new RESOURCE_REQUIREMENTS_LIST(hex_to_bytes(s)); }
 }
-
 class SZ implements Data {
-	static index = 1;
 	static parse(s:string) { return new SZ(s); }
-
 	constructor(public value: string) {}
 	get raw() { 
 		const length = this.value.length;
@@ -68,16 +76,11 @@ class SZ implements Data {
 		return new Uint8Array(a.buffer);
 	}
 }
-
 class EXPAND_SZ extends SZ {
-	static index = 2;
 	static parse(s:string) { return new EXPAND_SZ(s); }
 }
-
 class DWORD implements Data {
-	static index = 4;
 	static parse(s:string) { return new DWORD(+s); }
-
 	constructor(public value: number) {}
 	get raw() { 
 		const bytes = new Uint8Array(4);
@@ -86,9 +89,7 @@ class DWORD implements Data {
 	}	
 }
 class DWORD_BIG_ENDIAN implements Data {
-	static index = 5;
 	static parse(s:string) { return new DWORD_BIG_ENDIAN(+s); }
-
 	constructor(public value: number) {}
 	get raw() { 
 		const bytes = new Uint8Array(4);
@@ -97,9 +98,7 @@ class DWORD_BIG_ENDIAN implements Data {
 	}	
 }
 class MULTI_SZ implements Data {
-	static index = 7;
 	static parse(s:string) { return new MULTI_SZ(s.split('\\0')); }
-
 	constructor(public value: string[]) {}
 	get raw() { 
 		const length = this.value.reduce((acc, i) => acc + i.length + 1, 0);
@@ -115,9 +114,7 @@ class MULTI_SZ implements Data {
 
 }
 class QWORD implements Data {
-	static index = 11;
 	static parse(s:string) { return new QWORD(BigInt(s)); }
-
 	constructor(public value: bigint) {}
 	get raw() { 
 		const bytes = new Uint8Array(8);
@@ -141,37 +138,29 @@ export const TYPES : Record<string, Type> = {
 	QWORD: QWORD,
 };
 
-function bytes_to_hex(value: Uint8Array) {
-	return `${Array.from(value).map(i => i.toString(16).padStart(2, '0')).join(',')}`;
-}
-
-function put_string_bytes(buffer:ArrayBuffer, offset: number, value: string) {
-	const a = new Uint16Array(buffer, offset);
-	for (let i = 0; i < value.length; i++)
-		a[i] = value.charCodeAt(i);
-	a[value.length] = 0;
-	return offset + (value.length + 1) * 2;
+export function string_to_type(type: string) : Type|undefined {
+	return TYPES[type.startsWith('REG_') ? type.substring(4) : type];
 }
 
 export function data_to_regstring(value: Data, strict: boolean = false) {
 	switch (value.constructor.name) {
-		case 'EXPAND_SZ':
-			if (strict) {
-				const d: string = value.value;
-				const bytes = new Uint8Array((d.length + 1) * 2);
-				put_string_bytes(bytes.buffer, 0, d);
-				return `hex(2):${bytes_to_hex(bytes)}`;
-			}
-			//falls through
-		case 'SZ':
-			return `"${value.value}"`;
-
 		case 'NONE':						return `hex(0):${bytes_to_hex(value.value)}`;
 		case 'LINK':						return `hex(6):${bytes_to_hex(value.value)}`;
 		case 'RESOURCE_LIST':				return `hex(8):${bytes_to_hex(value.value)}`;
 		case 'FULL_RESOURCE_DESCRIPTOR':	return `hex(9):${bytes_to_hex(value.value)}`;
 		case 'RESOURCE_REQUIREMENTS_LIST':	return `hex(a):${bytes_to_hex(value.value)}`;
 		case 'BINARY':						return `hex:${bytes_to_hex(value.value)}`;
+
+		case 'EXPAND_SZ':
+			if (strict) {
+				const d: string = value.value;
+				const bytes = new Uint8Array((d.length + 1) * 2);
+				string_to_bytes(bytes.buffer, 0, d);
+				return `hex(2):${bytes_to_hex(bytes)}`;
+			}
+			//falls through
+		case 'SZ':
+			return `"${value.value}"`;
 
 		case 'DWORD_BIG_ENDIAN':
 			if (strict) {
@@ -196,7 +185,7 @@ export function data_to_regstring(value: Data, strict: boolean = false) {
 			if (strict) {
 				const length 	= d.reduce((acc, i) => acc + i.length + 1, 1);
 				const bytes		= new Uint8Array(length * 2);
-				const end 		= d.reduce((acc, i) => put_string_bytes(bytes.buffer, acc, i), 0);
+				const end 		= d.reduce((acc, i) => string_to_bytes(bytes.buffer, acc, i), 0);
 				bytes[end]		= 0;
 				bytes[end + 1]	= 0;
 				return `hex(7):${bytes_to_hex(bytes)}`;
@@ -206,11 +195,6 @@ export function data_to_regstring(value: Data, strict: boolean = false) {
 		default:
 			return '?';
 	}
-}
-
-function bytes_to_string(buffer: ArrayBuffer) {
-	const s = new TextDecoder('utf-16le').decode(buffer);
-	return s.endsWith('\0') ? s.slice(0, -1) : s;
 }
 
 export function regstring_to_data(value: string) : Data|undefined {
@@ -246,15 +230,17 @@ export function regstring_to_data(value: string) : Data|undefined {
 	}
 }
 
-const hosts32 : Record<string, KeyImp> = {};
-const hosts64 : Record<string, KeyImp> = {};
+class RegError {
+	constructor(public message: string, public code: number = -1) {}
+	toString() { return this.message; }
+}
 
 class Process {
 	stdout: string = '';
 	stderr: string = '';
 	error?: Error;
 
-	constructor(exec: string, args:string[], reject: (reason?: any) => void, close: (proc: Process) => void) {
+	constructor(exec: string, args:string[], reject: (reason?: RegError) => void, close: (proc: Process) => void) {
 		//console.log(`SPAWN: ${exec} ${args.join(' ')}`);
 
 		const proc = spawn(exec, args, {
@@ -270,29 +256,16 @@ class Process {
 		proc.on('error', (error: Error) => { this.error = error; });
 		proc.on('close', code => {
 			if (this.error) {
-				reject({
-					error: this.error.message,
-					code: -1
-				});
+				reject(new RegError(this.error.message));
 			} else if (code) {
 				const message =`${exec} ${args.join(' ')} command exited with code ${code}:\n${this.stdout.trim()}\n${this.stderr.trim()}`;
 				//console.log(message);
-				reject({
-					error: message,
-					code: code
-				});
+				reject(new RegError(message, code));
 			} else {
 				close(this);
 			}
 		});
 	}
-}
-
-export function string_to_type(type: string) : Type|undefined {
-	if (type.startsWith('REG_'))
-		type = type.substring(4);
-
-	return TYPES[type];
 }
 
 function regExec() {
@@ -304,9 +277,8 @@ function argName(name?:string) {
 }
 
 function argData(value:Data) {
-	//const type = (value as NONE).constructor;
 	const type = value.constructor;
-	return ['/t', `REG_${type.name}`, ...(type == MULTI_SZ ? ['/s', ','] : []), '/d', `"${value}"`];
+	return ['/t', `REG_${type.name}`, ...(type == MULTI_SZ ? ['/s', ','] : []), '/d', `"${value.value}"`];
 }
 
 class KeyImp {
@@ -314,31 +286,32 @@ class KeyImp {
 	public _keys: 	Record<string, KeyImp> = {};
 	public found?:	boolean;
 
-	private getRoot(): [KeyImp, string] {
+	private getRootAndPath(): [KeyImp, string] {
 		let key = this.name;
 		let p 	= this.parent;
-		if (p) {
-			while (p.parent) {
-				key = p.name + '\\' + key;
-				p 	= p.parent;
-			}
-			if (p.name)
-				key = `\\\\${p.name}\\${key}`;
-			return [p, key];
+		if (!p)
+			return [this, key];
+
+		while (p.parent) {
+			key = p.name + '\\' + key;
+			p 	= p.parent;
 		}
-		return [this, key];
+		if (p.name)
+			key = `\\\\${p.name}\\${key}`;
+		return [p, key];
 	}
+	
 	public getView(root?:KeyImp) {
 		if (!root)
-			root = this.getRoot()[0];
+			root = this.getRootAndPath()[0];
 		return hosts32[root.name] === root ? '32' : '64';
 	}
 	public get path() {
-		return this.getRoot()[1];
+		return this.getRootAndPath()[1];
 	}
 
 	private runCommand(command:string, ...args:string[]) {
-		const [root, fullpath] = this.getRoot();
+		const [root, fullpath] = this.getRootAndPath();
 		const view = hosts32[root.name] === root ? '32' : '64';
 		if (view)
 			args.push('/reg:' + view);
@@ -389,7 +362,7 @@ class KeyImp {
 	constructor(public name: string, public parent?: KeyImp) {}
 
 	public toString() {
-		return this.getRoot()[1];
+		return this.path;
 	}
 
 	public subkey(key: string) : KeyImp {
@@ -428,12 +401,15 @@ class KeyImp {
 	}
 
 	public async deleteValue(key: string) : Promise<boolean> {
-		if (this._items)
-			this._items.then(x => delete x[key]);
-		return this.runCommand('DELETE', ...argName(key), '/f').then(() => true, () => false);
+		return this.runCommand('DELETE', ...argName(key), '/f').then(
+			() => this._items
+				? this._items.then(x => { delete x[key]; return true; })
+				: true,
+			() => false
+		);
 	}
 
-	public async setValue(key: string, value: any) : Promise<boolean> {
+	public async setValue(key: string, value: Data) : Promise<boolean> {
 		return this.runCommand('ADD', ...argName(key), ...argData(value), '/f').then(
 			() => this._items
 				? this._items.then(x => { x[key] = value; return true; })
@@ -443,13 +419,7 @@ class KeyImp {
 	}
 
 	public async setValueString(key: string, type: Type, value: string) : Promise<boolean> {
-		const value2 = type.parse(value);
-		return this.runCommand('ADD', ...argName(key), ...argData(value2), '/f').then(
-			() => this._items
-				? this._items.then(x => { x[key] = value2; return true; })
-				: true,
-			() => false
-		);
+		return this.setValue(key, type.parse(value));
 	}
 
 	public async export(file: string) : Promise<boolean> {
@@ -468,7 +438,7 @@ interface Values {
 	then: (func: (x: Record<string, any>)=>void)=>unknown;
 }
 
-export interface KeyBase {
+interface KeyBase {
 	name:		string;
 	parent:		KeyImp;
 	path:		string;
@@ -499,9 +469,6 @@ function MakeValues(p: KeyImp) : Values {
 			p.setValue(key, value);
 			return true;
 		},
-		//has: (obj, key: string) => {
-		//	return key in p._keys;
-		//},
 		deleteProperty: (obj, key: string) => {
 			p.deleteValue(key);
 			return true;
@@ -511,7 +478,7 @@ function MakeValues(p: KeyImp) : Values {
 
 function MakeKey(p: KeyImp): Key {
 	return new Proxy(p as unknown as Key, {
-		get: (obj, key: string | symbol, receiver) => {
+		get: (obj, key: string | symbol) => {
 			const v = p[key as keyof KeyImp];
 			if (v)
 				return typeof v === 'function' ? v.bind(p) : v;
