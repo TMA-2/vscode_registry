@@ -5,7 +5,11 @@ const HIVES_SHORT 	= ['HKLM', 'HKU', 'HKCU', 'HKCR', 'HKCC'];
 const HIVES_LONG	= ['HKEY_LOCAL_MACHINE', 'HKEY_USERS', 'HKEY_CURRENT_USER', 'HKEY_CLASSES_ROOT', 'HKEY_CURRENT_CONFIG'];
 const KEY_PATTERN   = /(\\[a-zA-Z0-9_\s]+)*/;
 const PATH_PATTERN	= /^(HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|HKEY_USERS|HKEY_CURRENT_CONFIG).*\\(.*)$/;
-const ITEM_PATTERN  = /^(.*)\s(REG_SZ|REG_MULTI_SZ|REG_EXPAND_SZ|REG_DWORD|REG_QWORD|REG_BINARY|REG_NONE)\s+([^\s].*)$/;
+//const ITEM_PATTERN  = /^(.*)\s(REG_[A-Z_]+)\s+([^\s].*)$/;
+const ITEM_PATTERN  = /^(.*)\s(REG_[A-Z_]+)\s+\((.*?)\)\s+([^\s].*)$/;
+
+//const reg_exec = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
+const reg_exec = path.resolve(path.dirname(__filename), '..\\reg\\reg.exe');
 
 const hosts32 : Record<string, KeyImp> = {};
 const hosts64 : Record<string, KeyImp> = {};
@@ -15,7 +19,7 @@ export const REMOTE_HIVES	= HIVES.slice(0, 2);
 
 export interface Type {
 	name:	string;
-	parse:	(s:string)=>Data;
+	parse:	(s:string, i?:number)=>Data;
 }
 
 export interface Data {
@@ -41,6 +45,12 @@ function string_to_bytes(buffer:ArrayBuffer, offset: number, value: string) {
 function bytes_to_string(buffer: ArrayBuffer) {
 	const s = new TextDecoder('utf-16le').decode(buffer);
 	return s.endsWith('\0') ? s.slice(0, -1) : s;
+}
+
+class OTHER implements Data {
+	static parse(s:string, i?:number) { return new OTHER(hex_to_bytes(s), i); }
+	constructor(public value: Uint8Array, public type?:number) {}
+	get raw() { return this.value; }
 }
 
 class NONE implements Data {
@@ -124,26 +134,32 @@ class QWORD implements Data {
 }
 
 export const TYPES : Record<string, Type> = {
-	NONE: NONE,
-	SZ: SZ,
-	EXPAND_SZ: EXPAND_SZ,
-	BINARY: BINARY,
-	DWORD: DWORD,
-	DWORD_BIG_ENDIAN: DWORD_BIG_ENDIAN,
-	LINK: LINK,
-	MULTI_SZ: MULTI_SZ,
-	RESOURCE_LIST: RESOURCE_LIST,
-	FULL_RESOURCE_DESCRIPTOR: FULL_RESOURCE_DESCRIPTOR,
+	NONE:   					NONE,
+	SZ: 						SZ,
+	EXPAND_SZ:  				EXPAND_SZ,
+	BINARY: 					BINARY,
+	DWORD:  					DWORD,
+	DWORD_BIG_ENDIAN:   		DWORD_BIG_ENDIAN,
+	LINK:   					LINK,
+	MULTI_SZ:   				MULTI_SZ,
+	RESOURCE_LIST:  			RESOURCE_LIST,
+	FULL_RESOURCE_DESCRIPTOR:   FULL_RESOURCE_DESCRIPTOR,
 	RESOURCE_REQUIREMENTS_LIST: RESOURCE_REQUIREMENTS_LIST,
-	QWORD: QWORD,
+	QWORD:  					QWORD,
 };
 
 export function string_to_type(type: string) : Type|undefined {
 	return TYPES[type.startsWith('REG_') ? type.substring(4) : type];
 }
+export function number_to_type(type: number) : Type {
+	return type >= 0 && type < 12
+		? Object.values(TYPES)[type]
+		: OTHER;
+}
 
 export function data_to_regstring(value: Data, strict: boolean = false) {
 	switch (value.constructor.name) {
+		case 'OTHER':						return `hex(${(((value as OTHER).type??0)>>>0).toString(16)}):${bytes_to_hex(value.value)}`;
 		case 'NONE':						return `hex(0):${bytes_to_hex(value.value)}`;
 		case 'LINK':						return `hex(6):${bytes_to_hex(value.value)}`;
 		case 'RESOURCE_LIST':				return `hex(8):${bytes_to_hex(value.value)}`;
@@ -212,7 +228,8 @@ export function regstring_to_data(value: string) : Data|undefined {
 			return new BINARY(data);
 
 		const dv = new DataView(data.buffer, 0);
-		switch (parseInt(m[4], 16)) {
+		const itype = parseInt(m[4], 16);
+		switch (itype) {
 			case 0:		return new NONE(data);
 			case 1:		return new SZ(bytes_to_string(data.buffer));
 			case 2:		return new EXPAND_SZ(bytes_to_string(data.buffer));
@@ -225,7 +242,7 @@ export function regstring_to_data(value: string) : Data|undefined {
 			case 9:		return new FULL_RESOURCE_DESCRIPTOR(data);
 			case 10:	return new RESOURCE_REQUIREMENTS_LIST(data);
 			case 11:	return new QWORD(dv.getBigUint64(0, true));
-			default:	return new NONE(data);
+			default:	return new OTHER(data, itype);
 		}
 	}
 }
@@ -246,7 +263,7 @@ class Process {
 		const proc = spawn(exec, args, {
 			cwd: undefined,
 			env: process.env,
-			shell: true,
+			shell: false,
 			windowsHide: true,
 			stdio: ['ignore', 'pipe', 'pipe']
 		});
@@ -268,17 +285,13 @@ class Process {
 	}
 }
 
-function regExec() {
-	return process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
-}
-
 function argName(name?:string) {
 	return name ? ['/v', name] : ['/ve'];
 }
 
 function argData(value:Data) {
 	const type = value.constructor;
-	return ['/t', `REG_${type.name}`, ...(type == MULTI_SZ ? ['/s', ','] : []), '/d', `"${value.value}"`];
+	return ['/t', `REG_${type.name}`, ...(type == MULTI_SZ ? ['/s', ','] : []), '/d', value.value.toString()];
 }
 
 class KeyImp {
@@ -316,7 +329,7 @@ class KeyImp {
 		if (view)
 			args.push('/reg:' + view);
 
-		return new Promise<Process>((resolve, reject) => new Process(regExec(), [command, `"${fullpath}"`, ...args], reject, resolve));
+		return new Promise<Process>((resolve, reject) => new Process(reg_exec, [command, fullpath, ...args], reject, resolve));
 	}
 
 	private add_found_key(key:string) {
@@ -328,7 +341,7 @@ class KeyImp {
 	}
 
 	public reread() : Promise<Record<string, any>> {
-		return this._items = this.runCommand('QUERY').then(proc => {
+		return this._items = this.runCommand('QUERY', '/z').then(proc => {
 			const items : Record<string, Data> = {};
 			let lineNumber = 0;
 			for (const i of proc.stdout.split('\n')) {
@@ -337,9 +350,10 @@ class KeyImp {
 					if (lineNumber++ !== 0) {
 						const match = ITEM_PATTERN.exec(line);
 						if (match) {
-							const type = string_to_type(match[2].trim());
-							if (type)
-								items[match[1].trim()] = type.parse(match[3]);
+							//const type = string_to_type(match[2].trim());
+							const itype = +match[3].trim();
+							const type	= number_to_type(itype);
+							items[match[1].trim()] = type.parse(match[4], itype);
 							continue;
 						}
 					}
@@ -379,48 +393,47 @@ class KeyImp {
 		return this.found || (!this.parent?.found && await this.read().then(() => true, () => false));
 	}
 
-	public async clear() : Promise<boolean> {
+	public async clear_values() : Promise<void> {
 		if (this._items) {
 			this._items.then(x => {
 				for (const i in x)
 					delete x[i];
 			});
 		}
-		return this.runCommand('DELETE', '/f', '/va').then(() => true, () => false);
+		return this.runCommand('DELETE', '/f', '/va').then(() => {});
 	}
 
-	public async destroy() : Promise<boolean> {
+	public async destroy() : Promise<void> {
 		return this.runCommand('DELETE', '/f').then(
-			() => { delete this.parent?._keys[this.name]; return true; },
-			() => false
+			() => { delete this.parent?._keys[this.name]; }
 		);
 	}
 
-	public async create() : Promise<Key|undefined> {
-		return this.runCommand('ADD', '/f').then(() => MakeKey(this), () => undefined);
+	public async create() : Promise<Key> {
+		return this.runCommand('ADD', '/f').then(() => MakeKey(this));//, () => undefined);
 	}
 
-	public async deleteValue(key: string) : Promise<boolean> {
-		return this.runCommand('DELETE', ...argName(key), '/f').then(
-			() => this._items
-				? this._items.then(x => { delete x[key]; return true; })
-				: true,
-			() => false
+	public async deleteValue(name: string) : Promise<void> {
+		return this.runCommand('DELETE', ...argName(name), '/f').then(
+			() => {
+				if (this._items)
+					this._items.then(x => delete x[name]);
+			}
 		);
 	}
 
-	public async setValue(key: string, value: Data) : Promise<boolean> {
-		return this.runCommand('ADD', ...argName(key), ...argData(value), '/f').then(
-			() => this._items
-				? this._items.then(x => { x[key] = value; return true; })
-				: true,
-			() => false
+	public async setValue(name: string, data: Data) : Promise<void> {
+		return this.runCommand('ADD', ...argName(name), ...argData(data), '/f').then(
+			() => {
+				if (this._items)
+					this._items.then(x => x[name] = data);
+			}
 		);
 	}
 
-	public async setValueString(key: string, type: Type, value: string) : Promise<boolean> {
-		return this.setValue(key, type.parse(value));
-	}
+	//public async setValueString(key: string, type: Type, value: string) : Promise<boolean> {
+	//	return this.setValue(key, type.parse(value));
+	//}
 
 	public async export(file: string) : Promise<boolean> {
 		return this.runCommand('EXPORT', file, '/y').then(() => true, () => false);
@@ -435,7 +448,7 @@ class KeyImp {
 interface Values {
 	[key:string]:any;
 	clear: ()=>void;
-	then: (func: (x: Record<string, any>)=>void)=>unknown;
+	then: (func: (x: Record<string, Data>)=>void)=>unknown;
 }
 
 interface KeyBase {
@@ -443,12 +456,11 @@ interface KeyBase {
 	parent:		KeyImp;
 	path:		string;
 	exists:		() => Promise<boolean>;
-	clear:		() => Promise<boolean>;
-	destroy:	() => Promise<boolean>;
-	create:		() => Promise<Key|undefined>;
-	deleteValue:(key: string) 				=> Promise<boolean>;
-	setValue:	(key: string, value: any)	=> Promise<boolean>;
-	export:		(file: string) 				=> Promise<boolean>;
+	destroy:	() => Promise<void>;
+	create:		() => Promise<Key>;
+	deleteValue:(name: string) 				=> Promise<void>;
+	setValue:	(name: string, data: Data)	=> Promise<void>;
+	export:		(file: string) 				=> Promise<void>;
 	toString:	() => string;
 	values: 	Values;
 }
@@ -552,7 +564,7 @@ export async function importreg(file: string, view?: string, dirty?: KeyBase[]) 
 	if (view)
 		args.push('/reg:' + view);
 
-	return new Promise<Process>((resolve, reject) => new Process(regExec(), args, reject, resolve))
+	return new Promise<Process>((resolve, reject) => new Process(reg_exec, args, reject, resolve))
 		.then(() => {
 			if (dirty) {
 				const parents = new Set<KeyImp>();

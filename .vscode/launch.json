@@ -17,6 +17,22 @@
 				"${workspaceFolder}/out/**/*.js"
 			],
 			"preLaunchTask": "npm: watch"
+		},
+		{
+            "name": "Debug Reg",
+			"type":"cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/reg/reg.exe",
+            "args": ["EXPORT", "HKCU\\testkey", "D:\\test.reg"],//,"/v","name3","/t","REG_DWORD","/d","123"],
+            "cwd": "${workspaceFolder}/reg",
+			"preLaunchTask": "Build reg.exe"
+		},
+		{
+            "name": "Attach Debugger",
+			"type":"cppvsdbg",
+            "request": "attach",
+			"processId":"${command:pickProcess}"
 		}
+
 	]
 }

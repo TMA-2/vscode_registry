@@ -74,12 +74,18 @@ type TypeDecoration = {
 }
 
 const decorations : Record<string, TypeDecoration> = {
-	'SZ':			{ icon: 'symbol-text', 		color: 'charts.red', 	badge: 'SZ'},
-	'MULTI_SZ':		{ icon: 'symbol-array', 	color: 'charts.blue', 	badge: 'MS'},
-	'EXPAND_SZ':	{ icon: 'symbol-text', 		color: 'charts.yellow', badge: 'ES'},
-	'DWORD':		{ icon: 'symbol-number', 	color: 'charts.orange', badge: 'DW'},
-	'QWORD':		{ icon: 'symbol-number', 	color: 'charts.green', 	badge: 'QW'},
-	'BINARY':		{ icon: 'file-binary', 		color: 'charts.purple', badge: 'BI'},
+	'NONE':   						{ icon: 'file-binary',		color: '',				badge: ''},
+	'SZ': 							{ icon: 'symbol-text',		color: 'charts.red',	badge: 'SZ'},
+	'EXPAND_SZ':  					{ icon: 'symbol-text',		color: 'charts.yellow',	badge: 'ES'},
+	'BINARY': 						{ icon: 'file-binary',		color: 'charts.purple',	badge: 'BI'},
+	'DWORD':  						{ icon: 'symbol-number',	color: 'charts.orange',	badge: 'DW'},
+	'DWORD_BIG_ENDIAN':   			{ icon: 'symbol-number',	color: '',				badge: 'BE'},
+	'LINK':   						{ icon: 'file-binary',		color: '',				badge: 'L'},
+	'MULTI_SZ':   					{ icon: 'symbol-text',		color: 'charts.blue',	badge: 'MS'},
+	'RESOURCE_LIST':  				{ icon: 'file-binary',		color: '',				badge: 'RL'},
+	'FULL_RESOURCE_DESCRIPTOR':		{ icon: 'file-binary',		color: '',				badge: 'RD'},
+	'RESOURCE_REQUIREMENTS_LIST':	{ icon: 'file-binary',		color: '',				badge: 'RR'},
+	'QWORD':  						{ icon: 'symbol-number',	color: 'charts.green',	badge: 'QW'},
 };
 
 abstract class TreeItem extends vscode.TreeItem {
@@ -116,9 +122,10 @@ class ValueTreeItem extends TreeItem {
     constructor(parent : KeyTreeItem, public name: string, public data: registry.Data) {
 		super(parent, `${name} = ${registry.data_to_regstring(data)}`, TreeItemCollapsibleState.None);
 		const type 			= data.constructor.name;
-		const decoration	= decorations[type];
+		const decoration	= decorations[type] ?? decorations.NONE;
 		this.contextValue 	= 'value';
-		this.iconPath		= new vscode.ThemeIcon(decoration.icon, new vscode.ThemeColor(decoration.color));
+		if (decoration.icon)
+			this.iconPath	= new vscode.ThemeIcon(decoration.icon, decoration.color ? new vscode.ThemeColor(decoration.color) : undefined);
 		this.resourceUri	= Uri.parse(`reg:/${parent.key.path.replace(/\\/g,'/')}/${name}?type=${type}`);
 	}
 }
@@ -191,7 +198,6 @@ export class RegEditProvider implements vscode.TreeDataProvider<TreeItem>, vscod
 				return element.createChildren().then(children => {
 					return element.children = children;
 				}).catch(err => {
-					console.log(`get children: ${element.label} err=${err}`);
 					vscode.window.showInformationMessage(`${err}`);
 					return element.children = [];
 				});
@@ -228,7 +234,7 @@ export class RegEditProvider implements vscode.TreeDataProvider<TreeItem>, vscod
 
 	provideFileDecoration(uri: Uri, token: vscode.CancellationToken): vscode.ProviderResult<vscode.FileDecoration> {
 		if (uri.scheme === 'reg') {
-			const decoration = decorations[uri.query.substring(5)];
+			const decoration = decorations[uri.query.substring(5)] ?? decorations.NONE;
 			return {
 				badge: decoration.badge,
 				//color: new vscode.ThemeColor(decoration.color), 
@@ -322,6 +328,14 @@ export function activate(context: vscode.ExtensionContext) {
 		const disposable = vscode.commands.registerCommand(command, callback);
 		context.subscriptions.push(disposable);
 	}
+	async function try_reg(func: () => Promise<void>) {
+		try {
+			await func();
+		} catch (err) {
+			vscode.window.showErrorMessage(`${err}`);
+		}
+	}
+
 
 	const regedit = new RegEditProvider;
 
@@ -349,8 +363,8 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			const parent	= item.parent as KeyTreeItem;
 			const data2		= old_data.constructor as registry.Type;
-			if (await parent.key.setValue(item.name, data2.parse(data)))
-				regedit?.recreate(parent);
+			
+			try_reg(() => parent.key.setValue(item.name, data2.parse(data!)).then(() => regedit?.recreate(parent)));
 
 		} else if (item instanceof KeyTreeItem) {
 			const document = await vscode.workspace.openTextDocument(Uri.parse(`reg:/${item.key}`));
@@ -369,8 +383,10 @@ export function activate(context: vscode.ExtensionContext) {
 					return;
 			}
 
-			if (await item.key[name].create())
+			try_reg(async () => {
+				await item.key[name!].create();
 				regedit?.recreate(item);
+			});
 		}
 	});
 
@@ -423,8 +439,12 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			const type = registry.string_to_type(stype);
-			if (type && await item.key.setValue(name, type.parse(data)))
-				regedit.recreate(item);
+			if (type) {
+				try_reg(async () => {
+					await item.key.setValue(name!, type.parse(data!));
+					regedit.recreate(item);
+				});
+			}
 		}
 	});
 
@@ -445,15 +465,19 @@ export function activate(context: vscode.ExtensionContext) {
 		} else if (item instanceof KeyTreeItem) {
 			if (await yesno(`Are you sure you want to delete [${item.key.path}]?`)) {
 				const parent	= item.parent as KeyTreeItem;
-				if (await item.key.destroy())
+				try_reg(async () => {
+					await item.key.destroy();
 					regedit.recreate(parent);
+				});
 			}
 
 		} else if (item instanceof ValueTreeItem) {
 			const parent	= item.parent as KeyTreeItem;
 			if (await yesno(`Are you sure you want to delete '${item.name}' from [${parent.key.path}]?`)) {
-				if (await parent.key.deleteValue(item.name))
+				try_reg(async () => {
+					await parent.key.deleteValue(item.name);
 					regedit.recreate(parent);
+				});
 			}
 		}
 	});
@@ -543,4 +567,13 @@ export function activate(context: vscode.ExtensionContext) {
 	registerCommand("regedit.copy_strict", async (item: TreeItem) => {
 		copy(item, true);
 	});
+
+	registerCommand("regedit.older", async (file1: string, file2: string) => {
+		return vscode.workspace.fs.stat(Uri.file(file1)).then(stat1 => {
+			vscode.workspace.fs.stat(Uri.file(file2)).then(stat2 => {
+				return stat1.mtime < stat2.mtime;
+			});
+		});
+	});
+
 }
