@@ -1,4 +1,14 @@
 {
+    "files.exclude": {
+        "hidden": true,
+        "node_modules": true,
+        "out": true
+    },
+    "search.exclude": {
+        "hidden": true,
+        "node_modules": true,
+        "out": true
+    },
     "files.associations": {
         "cmath": "cpp",
         "cstddef": "cpp",
@@ -47,6 +57,7 @@
         "xlocmes": "cpp",
         "xlocmon": "cpp",
         "xloctime": "cpp",
-        "xtree": "cpp"
+        "xtree": "cpp",
+        "iomanip": "cpp"
     }
 }

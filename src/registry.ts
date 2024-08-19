@@ -9,7 +9,7 @@ const PATH_PATTERN	= /^(HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|H
 const ITEM_PATTERN  = /^(.*)\s(REG_[A-Z_]+)\s+\((.*?)\)\s+([^\s].*)$/;
 
 //const reg_exec = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
-const reg_exec = path.resolve(path.dirname(__filename), '..\\reg\\reg.exe');
+let reg_exec = path.resolve(path.dirname(__filename), '..\\reg\\reg.exe');
 
 const hosts32 : Record<string, KeyImp> = {};
 const hosts64 : Record<string, KeyImp> = {};
@@ -467,6 +467,7 @@ interface KeyBase {
 
 export interface Key extends KeyBase {
 	[key:string|symbol]:any;
+	then:		(func: ()=>Key)=>Key;
 	[Symbol.iterator]: () => any;
 }
 
@@ -585,3 +586,10 @@ export async function importreg(file: string, view?: string, dirty?: KeyBase[]) 
 		() => false
 	);
 }
+
+export async function set_exec(file?: string) {
+	if (!file)
+		file = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
+	reg_exec = file;
+}
+

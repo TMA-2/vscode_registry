@@ -23,6 +23,7 @@
             "args": [
                 "-g",
                 "reg\\reg.cpp",
+                "-DUNICODE", "-D_UNICODE", "-DWIN32_LEAN_AND_MEAN",
                 "-Od",
                 "-o", "reg\\reg.exe",
                 "/link", "advapi32.lib"

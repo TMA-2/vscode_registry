@@ -3,6 +3,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import * as registry from "./registry";
 
+
 import {TreeItemCollapsibleState, Uri} from "vscode";
 
 //-----------------------------------------------------------------------------
@@ -222,10 +223,24 @@ export class RegEditProvider implements vscode.TreeDataProvider<TreeItem>, vscod
 		return element.parent;
 	}
 
-	public getKeyItem(key: registry.Key): KeyTreeItem | undefined {
+	public getKeyItem(key: registry.Key|string): KeyTreeItem | undefined {
+		if (typeof key !== 'string')
+			key = key.path;
 		let node: KeyTreeItem | undefined;
-		for (const i of key.path.split('\\')) {
+		for (const i of key.split('\\')) {
 			const children: TreeItem[] | null = node ? node.children : this.children;
+			if (!children || !(node = children.find(j => (j instanceof KeyTreeItem) && j.label == i) as KeyTreeItem | undefined))
+				return;
+		}
+		return node;
+	}
+
+	public async getKeyItemCreate(key: registry.Key|string): Promise<KeyTreeItem | undefined> {
+		if (typeof key !== 'string')
+			key = key.path;
+		let node: KeyTreeItem | undefined;
+		for (const i of key.split('\\')) {
+			const children = await this.getChildren(node);
 			if (!children || !(node = children.find(j => (j instanceof KeyTreeItem) && j.label == i) as KeyTreeItem | undefined))
 				return;
 		}
@@ -235,6 +250,7 @@ export class RegEditProvider implements vscode.TreeDataProvider<TreeItem>, vscod
 	provideFileDecoration(uri: Uri, token: vscode.CancellationToken): vscode.ProviderResult<vscode.FileDecoration> {
 		if (uri.scheme === 'reg') {
 			const decoration = decorations[uri.query.substring(5)] ?? decorations.NONE;
+			if (decoration.badge)
 			return {
 				badge: decoration.badge,
 				//color: new vscode.ThemeColor(decoration.color), 
@@ -285,7 +301,7 @@ class RegFS implements vscode.FileSystemProvider {
 	async readFile(uri: Uri): Promise<Uint8Array> {
 		console.log(`read ${uri}`);
 		const file = path.join(os.tmpdir(), 'temp.reg');
-		return await registry.getKey(uri.path.substring(1)).export(file).then(() => vscode.workspace.fs.readFile(Uri.file(file)));
+		return await registry.getKey(uri.path.slice(1, -4)).export(file).then(() => vscode.workspace.fs.readFile(Uri.file(file)));
 	}
 
 	async writeFile(uri: Uri, content: Uint8Array, options: { create: boolean, overwrite: boolean }): Promise<void> {
@@ -306,6 +322,29 @@ class RegFS implements vscode.FileSystemProvider {
 }
 
 //-----------------------------------------------------------------------------
+//	Folding range provider
+//-----------------------------------------------------------------------------
+
+class RegFolding implements vscode.FoldingRangeProvider {
+	provideFoldingRanges(document: vscode.TextDocument, context: vscode.FoldingContext, token: vscode.CancellationToken) {
+		const re 		= /^\[/;
+		const ranges	= [];
+		let 	start	= 0;
+		for (let i = 0; i < document.lineCount; i++) {
+			if (re.test(document.lineAt(i).text)) {
+				if (start > 0)
+					ranges.push(new vscode.FoldingRange(start, i - 1, vscode.FoldingRangeKind.Region));
+				start = i;
+			}
+		}
+		if (start > 0)
+			ranges.push(new vscode.FoldingRange(start, document.lineCount - 1, vscode.FoldingRangeKind.Region));
+
+		return ranges;
+	}
+}
+
+//-----------------------------------------------------------------------------
 //	main extension entry point
 //-----------------------------------------------------------------------------
 
@@ -319,15 +358,22 @@ function copy(item: TreeItem, strict: boolean) {
 		vscode.env.clipboard.writeText(`[${key.path}]\n"${item.name}"=${registry.data_to_regstring(item.data, strict)}`);
 	}
 }
+function get_settings() {
+	const config = vscode.workspace.getConfiguration('regedit');
+	registry.set_exec(config.get<boolean>('useCustomReg') ? config.get<string>('regExecutable') : undefined);
+}
 
 let selected: TreeItem;
 
 export function activate(context: vscode.ExtensionContext) {
 	
 	function registerCommand(command: string, callback: (...args: any[]) => any, thisArg?: any) {
-		const disposable = vscode.commands.registerCommand(command, callback);
-		context.subscriptions.push(disposable);
+		context.subscriptions.push(vscode.commands.registerCommand(command, callback));
 	}
+	function registerTextEditorCommand(command: string, callback: (textEditor: vscode.TextEditor, edit: vscode.TextEditorEdit, ...args: any[]) => void, thisArg?: any) {
+		context.subscriptions.push(vscode.commands.registerTextEditorCommand(command, callback));
+	}
+
 	async function try_reg(func: () => Promise<void>) {
 		try {
 			await func();
@@ -336,8 +382,15 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	}
 
+	get_settings();
+	const configWatcher = vscode.workspace.onDidChangeConfiguration(event => {
+		if (event.affectsConfiguration('regedit'))
+			get_settings();
+	});
 
 	const regedit = new RegEditProvider;
+	context.subscriptions.push(vscode.languages.registerFoldingRangeProvider('reg', new RegFolding));
+
 
 	registerCommand("regedit.select", async (item: TreeItem) => {
 		selected = item;
@@ -367,7 +420,7 @@ export function activate(context: vscode.ExtensionContext) {
 			try_reg(() => parent.key.setValue(item.name, data2.parse(data!)).then(() => regedit?.recreate(parent)));
 
 		} else if (item instanceof KeyTreeItem) {
-			const document = await vscode.workspace.openTextDocument(Uri.parse(`reg:/${item.key}`));
+			const document = await vscode.workspace.openTextDocument(Uri.parse(`reg:/${item.key}.reg`));
 			await vscode.window.showTextDocument(document, {viewColumn: vscode.ViewColumn.Active});
 		}
 	});
@@ -391,69 +444,67 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	registerCommand("regedit.setValue",	async (item: string|TreeItem, name?: string, stype?: string, data?:string) => {
-		if (typeof(item) == 'string') {
-			const type = stype ? registry.string_to_type(stype) : registry.TYPES.SZ;
-			if (type)
-				registry.getKey(item).setValue(item, type.parse(data || ''));
-			return;
+		if (!name) {
+			name = await vscode.window.showInputBox({prompt: 'Enter the name of the new Value'});
+			if (!name)
+				return;
 		}
 
-		if (item instanceof KeyTreeItem) {
-			if (!name) {
-				name = await vscode.window.showInputBox({prompt: 'Enter the name of the new Value'});
-				if (!name)
-					return;
+		if (!stype) {
+			const items = [
+				{ label: 'REG_SZ'			},
+				{ label: 'REG_MULTI_SZ'		},
+				{ label: 'REG_EXPAND_SZ'	},
+				{ label: 'REG_DWORD'		},
+				{ label: 'REG_QWORD'		},
+				{ label: 'REG_BINARY'		},
+				{ label: 'REG_NONE'			},
+			];
+			
+			const selectedItem = await vscode.window.showQuickPick(items, {placeHolder: 'Select the value type'});
+			if (!selectedItem)
+				return;
+			stype = selectedItem.label;
+		}
+
+		const type = stype ? registry.string_to_type(stype) : registry.TYPES.SZ;
+		if (!type)
+			return;
+
+		if (!data) {
+			switch (stype) {
+				case 'REG_EXPAND_SZ':
+				case 'REG_SZ':			data = '<new>'; break;
+				case 'REG_MULTI_SZ':	data = '<new>\\0<new>'; break;
+				case 'REG_DWORD':
+				case 'REG_QWORD':
+				case 'REG_BINARY':		data = '0'; break;
+				default:				break;
 			}
 
-			if (!stype) {
-				const items = [
-					{ label: 'REG_SZ'			},
-					{ label: 'REG_MULTI_SZ'		},
-					{ label: 'REG_EXPAND_SZ'	},
-					{ label: 'REG_DWORD'		},
-					{ label: 'REG_QWORD'		},
-					{ label: 'REG_BINARY'		},
-					{ label: 'REG_NONE'			},
-				];
-				
-				const selectedItem = await vscode.window.showQuickPick(items, {placeHolder: 'Select the value type'});
-				if (!selectedItem)
-					return;
-				stype = selectedItem.label;
-			}
+			data = await vscode.window.showInputBox({prompt: 'Enter the initial value', value: data});
+			if (!data)
+				return;
+		}
 
-			if (!data) {
-				switch (stype) {
-					case 'REG_EXPAND_SZ':
-					case 'REG_SZ':			data = '<new>'; break;
-					case 'REG_MULTI_SZ':	data = '<new>\\0<new>'; break;
-					case 'REG_DWORD':
-					case 'REG_QWORD':
-					case 'REG_BINARY':		data = '0'; break;
-					default:				break;
-				}
-
-				data = await vscode.window.showInputBox({prompt: 'Enter the initial value', value: data});
-				if (!data)
-					return;
-			}
-
-			const type = registry.string_to_type(stype);
-			if (type) {
-				try_reg(async () => {
-					await item.key.setValue(name!, type.parse(data!));
+		const key = typeof(item) == 'string' ? registry.getKey(item) : item instanceof KeyTreeItem ? item.key : undefined;
+		if (key) {
+			try_reg(async () => {
+				await key.setValue(name, type.parse(data));
+				if (item instanceof KeyTreeItem)
 					regedit.recreate(item);
-				});
-			}
+			});
 		}
 	});
 
 	registerCommand("regedit.delete", async (item: string|TreeItem) => {
 		if (!item)
 			item = selected;
+
 		if (typeof(item) == 'string') {
-			const key = await registry.getKey(path.dirname(item));
-			const base = path.basename(item);
+			const split = item.lastIndexOf('\\');
+			const key	= await registry.getKey(item.substring(0, split));
+			const base	= item.substring(split + 1);
 			if (base in key)
 				delete key[base];
 			else
@@ -483,10 +534,10 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	registerCommand("regedit.rename", async (item: string|TreeItem, newname?: string) => {
-		let key:registry.Key;
-		let name:string;
-		let value:string = '';
-		let parent:KeyTreeItem | undefined;
+		let key:	registry.Key;
+		let name:	string;
+		let value:	string = '';
+		let parent:	KeyTreeItem | undefined;
 
 		if (typeof(item) == 'string') {
 			key		= await registry.getKey(path.dirname(item));
@@ -568,12 +619,43 @@ export function activate(context: vscode.ExtensionContext) {
 		copy(item, true);
 	});
 
-	registerCommand("regedit.older", async (file1: string, file2: string) => {
-		return vscode.workspace.fs.stat(Uri.file(file1)).then(stat1 => {
-			vscode.workspace.fs.stat(Uri.file(file2)).then(stat2 => {
-				return stat1.mtime < stat2.mtime;
-			});
-		});
-	});
+	registerTextEditorCommand("regedit.viewInReg", async editor => {
 
+		const treeView = vscode.window.createTreeView("regedit-view", {treeDataProvider: regedit});
+
+		const sel = editor.selection;
+		const doc = editor.document;
+
+		let line = sel.start.line;
+
+		const key_re = /^\s*\[(.*)\]/;
+
+		const lineText = doc.lineAt(line).text;
+		if (lineText.startsWith('[')) {
+			const key = key_re.exec(lineText)?.[1];
+			if (key) {
+				const item = await regedit.getKeyItemCreate(key);
+				if (item)
+					treeView.reveal(item);
+			}
+
+		} else {
+			const value = /"(.*)"=/.exec(lineText)?.[1];
+			if (value) {
+				let m:RegExpExecArray|null = null;
+				while (--line >= 0 && !(m = key_re.exec(doc.lineAt(line).text)));
+
+				const key = m?.[1];
+				if (key) {
+					const item = await regedit.getKeyItemCreate(key);
+					for (const child of await regedit.getChildren(item)) {
+						if (child instanceof ValueTreeItem && child.name == value) {
+							treeView.reveal(child);
+							break;
+						}
+					}
+				}
+			}
+		}
+	});
 }

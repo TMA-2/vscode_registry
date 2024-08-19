@@ -1,0 +1,108 @@
+{
+    "scopeName": "source.reg",
+    "patterns": [
+        {
+            "name": "keyword.control.import.reg",
+            "match": "Windows Registry Editor Version 5\\.00|REGEDIT4"
+        },
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#keys"
+        },
+        {
+            "include": "#values"
+        }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.reg",
+                    "match": ";.*$"
+                }
+            ]
+        },
+        "keys": {
+            "patterns": [
+                {
+                    "name": "keyword.control.reg",
+                    "match": "\\[(HKEY_CLASSES_ROOT|HKEY_CURRENT_USER|HKEY_LOCAL_MACHINE|HKEY_USERS|HKEY_CURRENT_CONFIG)(\\\\.*)*\\]"
+                },
+                {
+                    "name": "keyword.deprecated.reg",
+                    "match": "\\[-(HKEY_CLASSES_ROOT|HKEY_CURRENT_USER|HKEY_LOCAL_MACHINE|HKEY_USERS|HKEY_CURRENT_CONFIG)(\\\\.*)*\\]"
+                },
+                {
+                    "name": "string.unquoted.reg",
+                    "match": "\\\\[^\\\\]+(\\\\[^\\\\]+)*"
+                }
+            ]
+        },
+        "values": {
+            "patterns": [
+                {
+                    "begin": "^(.*?)=",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "entity.name.tag.reg"
+                        }
+                    },
+                    "end": "(?<!\\\\)\\r?\\n",
+                    "patterns": [
+                        {
+                            "begin": "\\b(?i)HEX(\\((.*)\\))?:",
+                            "end": "(?<!\\\\)\\r?\\n",
+                            "name": "constant.language.hex.reg",
+                            "beginCaptures": {
+                                "2": {"name": "constant.numeric.reg"}
+                            },
+                            "patterns": [
+                                {"include":"#hex"},
+                                {"include":"#comma"},
+                                {"include":"#continuation"}
+                            ]
+                        },
+                        {
+                            "begin": "\\b(?i)[DQ]WORD:",
+                            "end": "(?<!\\\\)\\r?\\n",
+                            "name": "constant.language.reg",
+                            "patterns": [
+                                {"include":"#hex"},
+                                {"include":"#continuation"}
+                            ]
+                        },
+                        {
+                            "begin": "\"",
+                            "end": "\"|(?<!\\\\)\\r?\\n",
+                            "name": "string.quoted.double.reg",
+                            "patterns": [
+                                {
+                                    "match": "\\\\.",
+                                    "name": "constant.character.escape.reg"
+                                },
+                                {"include":"#continuation"}
+                            ]
+                        }
+
+
+                    ]
+                }
+            ]
+        },
+        "comma": {
+            "name": "punctuation.separator.comma.reg",
+            "match": ","
+        },
+        "hex": {
+            "name": "constant.numeric.hex.reg",
+            "match": "[0-9A-Fa-f]+"
+        },
+        "continuation": {
+            "match": "\\\\\\s*$",
+            "name": "punctuation.separator.continuation.reg"
+        }
+
+    }
+}

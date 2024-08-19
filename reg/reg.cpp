@@ -1,16 +1,14 @@
-#include <stdio.h>
-#include <string>
 #include <windows.h>
-#include <stdio.h>
-#include <tchar.h>
+#include <string>
 #include <iostream>
+#include <iomanip>
 #include <fstream>
-#include <sstream>
-#include <vector>
-#include <map>
+#include <codecvt>
+#include <io.h>
+#include <fcntl.h>
 
 using std::endl;
-static auto& out = std::cout;
+static auto& out = std::wcout;
 
 //-----------------------------------------------------------------------------
 //	constants
@@ -21,45 +19,43 @@ static auto& out = std::cout;
 
 enum OP { QUERY, ADD, DEL, EXPORT, IMPORT, COPY, SAVE, RESTORE, LOAD, UNLOAD, COMPARE, FLAGS, BAD };
 
-static const char* ops[] = {
-	"QUERY",
-	"ADD",
-	"DELETE",
-	"EXPORT",
-	"IMPORT",
-//	"COPY",
-//	"SAVE",
-//	"RESTORE",
-//	"LOAD",
-//	"UNLOAD",
-//	"COMPARE",
-//	"FLAGS"
+static const wchar_t* ops[] = {
+	L"QUERY",
+	L"ADD",
+	L"DELETE",
+	L"EXPORT",
+	L"IMPORT",
+//	L"COPY",
+//	L"SAVE",
+//	L"RESTORE",
+//	L"LOAD",
+//	L"UNLOAD",
+//	L"COMPARE",
+//	L"FLAGS"
 };
 
-static const char* types[] = {
-	"REG_NONE",
-	"REG_SZ",
-	"REG_EXPAND_SZ",
-	"REG_BINARY",
-	"REG_DWORD",
-	//"REG_DWORD_LITTLE_ENDIAN",
-	"REG_DWORD_BIG_ENDIAN",
-	"REG_LINK",
-	"REG_MULTI_SZ",
-	"REG_RESOURCE_LIST",
-	"REG_FULL_RESOURCE_DESCRIPTOR",
-	"REG_RESOURCE_REQUIREMENTS_LIST",
-	"REG_QWORD",
-	//"REG_QWORD_LITTLE_ENDIAN",
+static const wchar_t* types[] = {
+	L"REG_NONE",
+	L"REG_SZ",
+	L"REG_EXPAND_SZ",
+	L"REG_BINARY",
+	L"REG_DWORD",	// aka REG_DWORD_LITTLE_ENDIAN
+	L"REG_DWORD_BIG_ENDIAN",
+	L"REG_LINK",
+	L"REG_MULTI_SZ",
+	L"REG_RESOURCE_LIST",
+	L"REG_FULL_RESOURCE_DESCRIPTOR",
+	L"REG_RESOURCE_REQUIREMENTS_LIST",
+	L"REG_QWORD",	// aka REG_QWORD_LITTLE_ENDIAN
 };
 
-const char *hives[][2] = {
-	"HKEY_CLASSES_ROOT",	"HKCR",
-	"HKEY_CURRENT_USER",	"HKCU",
-	"HKEY_LOCAL_MACHINE",	"HKLM",
-	"HKEY_USERS",			"HKU",
-	"HKEY_PERFORMANCE_DATA","HKPD",
-	"HKEY_CURRENT_CONFIG",	"HKCC",
+const wchar_t *hives[][2] = {
+	L"HKEY_CLASSES_ROOT",		L"HKCR",
+	L"HKEY_CURRENT_USER",		L"HKCU",
+	L"HKEY_LOCAL_MACHINE",		L"HKLM",
+	L"HKEY_USERS",				L"HKU",
+	L"HKEY_PERFORMANCE_DATA",	L"HKPD",
+	L"HKEY_CURRENT_CONFIG",		L"HKCC",
 };
 
 //-----------------------------------------------------------------------------
@@ -68,7 +64,16 @@ const char *hives[][2] = {
 
 template<typename T, int N> auto num_elements(T (&)[N]) { return N; }
 
-HKEY get_hive(const std::string &hive) {
+std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> wconverter;
+
+std::wstring wide(const char* str) {
+	return wconverter.from_bytes(str);
+}
+std::wstring wide(const std::string &str) {
+	return wconverter.from_bytes(str);
+}
+
+HKEY get_hive(const std::wstring &hive) {
 	for (auto &i : hives) {
 		if (hive == i[0] || hive == i[1])
 			return (HKEY)((void*)(0x80000000 + (&i - hives)));
@@ -76,9 +81,9 @@ HKEY get_hive(const std::string &hive) {
 	return 0;
 }
 
-auto unescape(const char *s, char *dest, char separator = 0) {
+auto unescape(const wchar_t *s, wchar_t *dest, char separator = 0) {
 	auto p = dest;
-	while (char c = *s++) {
+	while (auto c = *s++) {
 		if (c == '\\' && s[0]) {
 			switch (c = *s++) {
 				case '\\': break;
@@ -97,16 +102,17 @@ auto unescape(const char *s, char *dest, char separator = 0) {
 	return p - dest;
 }
 
-auto escape(const char *s, size_t size, char *dest, char separator = 0) {
+auto escape(const wchar_t *s, size_t size, wchar_t *dest, char separator = 0) {
 	auto p = dest;
-	for (const char *e = s + size; s < e; s++) {
-		char c = *s;
+	for (auto e = s + size; s < e; s++) {
+		auto c = *s;
 		switch (c) {
 			case '\\': *p++ = '\\'; break;
 			case '\0': *p++ = '\\'; c = '0'; break;
 			case '\n': *p++ = '\\'; c = 'n'; break;
 			case '\r': *p++ = '\\'; c = 'r'; break;
 			case '\t': *p++ = '\\'; c = 't'; break;
+			case '"': *p++ = '\\'; break;
 			default:
 				if (c == separator) {
 					*p++ = '\\';
@@ -122,7 +128,7 @@ auto escape(const char *s, size_t size, char *dest, char separator = 0) {
 
 const char *hex = "0123456789abcdef";
 
-auto hexchar(char c) {
+auto hexchar(wchar_t c) {
 	return c >= '0' && c <= '9' ? c - '0'
 		: c >= 'A' && c <= 'F' ? c - 'A' + 10
 		: c >= 'a' && c <= 'f' ? c - 'a' + 10
@@ -134,8 +140,8 @@ void write_command_data(BYTE *data, DWORD size, DWORD type, char separator) {
 		case REG_SZ:
 		case REG_EXPAND_SZ:
 		case REG_MULTI_SZ: {
-			auto p = (char*)malloc(size * 2);
-			escape((const char*)data, size - 1, (char*)p, separator);
+			auto p = (wchar_t*)malloc(size * 2);
+			escape((const wchar_t*)data, size / 2 - 1, (wchar_t*)p, separator);
 			out << p << endl; 
 			free(p);
 			break;
@@ -162,7 +168,7 @@ void write_command_data(BYTE *data, DWORD size, DWORD type, char separator) {
 	}
 }
 
-size_t parse_command_data(char *data, DWORD type, char separator) {
+size_t parse_command_data(wchar_t *data, DWORD type, char separator) {
 	switch (type) {
 		case REG_NONE:
 		case REG_SZ:
@@ -171,16 +177,16 @@ size_t parse_command_data(char *data, DWORD type, char separator) {
 			return unescape(data, data, separator);
 
 		case REG_DWORD:
-			*(DWORD*)data = atol(data);
+			*(DWORD*)data = wcstol(data, nullptr, 10);
 			return 4;
 
 		case REG_QWORD:
-			*(uint64_t*)data = atoll(data);
+			*(uint64_t*)data = wcstoll(data, nullptr, 10);
 			return 8;
 
 		case REG_BINARY: {
 			BYTE *d = (BYTE*)data;
-			for (const char *p = data; ; p++) {
+			for (const wchar_t *p = data; ; p++) {
 				auto d0 = hexchar(p[0]);
 				auto d1 = hexchar(p[1]);
 				if (d0 >= 0 && d1 >= 0)
@@ -194,22 +200,22 @@ size_t parse_command_data(char *data, DWORD type, char separator) {
 	}
 }
 
-void write_reg_data(std::ostream &out, BYTE *data, DWORD size, DWORD type) {
+void write_reg_data(std::wostream &out, BYTE *data, DWORD size, DWORD type) {
 	switch (type) {
 		case REG_SZ: {
-			auto p = (char*)malloc(size * 2);
-			escape((const char*)data, size - 1, (char*)p);
+			auto p = (wchar_t*)malloc(size * 2);
+			escape((const wchar_t*)data, size / 2 - 1, p);
 			out << '"' << p << '"' << endl; 
 			free(p);
 			break;
 		}
 		case REG_DWORD:
-			out << "dword:" << std::hex << *(DWORD*)data << std::dec << endl;
+			out << "dword:" << std::setfill(L'0') << std::setw(8) << std::hex << *(DWORD*)data << std::dec << endl;
 			break;
 
-		case REG_QWORD:
-			out << "qword:" << std::hex << *(uint64_t*)data << std::dec << endl;
-			break;
+		//case REG_QWORD:
+		//	out << "qword:" << std::hex << *(uint64_t*)data << std::dec << endl;
+		//	break;
 
 		default:
 			if (type == REG_BINARY)
@@ -228,27 +234,27 @@ void write_reg_data(std::ostream &out, BYTE *data, DWORD size, DWORD type) {
 	}
 }
 
-size_t parse_reg_data(const char *line, DWORD &type, BYTE *data) {
+size_t parse_reg_data(const wchar_t *line, DWORD &type, BYTE *data) {
 	if (line[0] == '"') {
 		type = REG_SZ;
-		return unescape(line + 1, (char*)data) + 1;
+		return unescape(line + 1, (wchar_t*)data) * 2 + 1;
 
-	} else if (strncmp(line, "dword:", 5)) {
+	} else if (wcsncmp(line, L"dword:", 5)) {
 		type = REG_DWORD;
-		*((DWORD*)data) = strtoul(line + 5, nullptr, 16);
+		*((DWORD*)data) = wcstoul(line + 5, nullptr, 16);
 		return 4;
 
-	} else if (strncmp(line, "qword:", 5)) {
+	} else if (wcsncmp(line, L"qword:", 5)) {
 		type = REG_QWORD;
-		*((uint64_t*)data) = strtoull(line + 5, nullptr, 16);
+		*((uint64_t*)data) = wcstoull(line + 5, nullptr, 16);
 		return 8;
 
-	} else if (strncmp(line, "hex", 3)) {
+	} else if (wcsncmp(line, L"hex", 3)) {
 		line += 3;
 	 	type = REG_BINARY;
 
 		if (line[0] == '(') {
-			type = strtoul(line + 1, nullptr, 16);
+			type = wcstoul(line + 1, nullptr, 16);
 			while (*line && *line != ')')
 				++line;
 		}
@@ -257,7 +263,7 @@ size_t parse_reg_data(const char *line, DWORD &type, BYTE *data) {
 			line++;
 
 		auto d = data;
-		for (const char *p = line; ; p++) {
+		for (const wchar_t *p = line; ; p++) {
 			auto d0 = hexchar(p[0]);
 			auto d1 = hexchar(p[1]);
 			if (d0 >= 0 && d1 >= 0)
@@ -278,7 +284,7 @@ size_t parse_reg_data(const char *line, DWORD &type, BYTE *data) {
 
 struct RegKey {
 	struct Info {
-		char	class_name[MAX_PATH] = "";		// buffer for class name 
+		wchar_t	class_name[MAX_PATH] = L"";		// buffer for class name 
 		DWORD	num_subkeys = 0;				// number of subkeys 
 		DWORD	max_subkey	= 0;				// longest subkey size 
 		DWORD	max_class 	= 0;				// longest class string 
@@ -286,7 +292,7 @@ struct RegKey {
 		DWORD	max_value 	= 0;				// longest value name 
 		DWORD	max_data 	= 0;				// longest value data 
 		DWORD	cbSecurityDescriptor = 0; 		// size of security descriptor 
-		FILETIME ftLastWriteTime;				// last write time 
+		FILETIME last_write;					// last write time 
 
 		Info(HKEY h) {
 			DWORD	class_size = MAX_PATH;		// size of class string 
@@ -302,19 +308,17 @@ struct RegKey {
 				&max_value,						// longest value name 
 				&max_data,						// longest value data 
 				&cbSecurityDescriptor,			// security descriptor 
-				&ftLastWriteTime	 			// last write time 
+				&last_write			 			// last write time 
 			);
 		}
 	};
 	struct Value {
-		std::string	name;
+		std::wstring	name;
 		DWORD	type	= 0;
 		DWORD 	size	= 0;
 
-		Value(const char *name = "", DWORD type = 0, DWORD size = 0) : name(name), type(type), size(size) {}
-		explicit constexpr operator bool() const {
-			return size;
-		}
+		Value(const wchar_t *name = L"", DWORD type = 0, DWORD size = 0) : name(name), type(type), size(size) {}
+		explicit constexpr operator bool() const { return size; }
 	};
 
 
@@ -322,15 +326,15 @@ struct RegKey {
 
 	RegKey() {}
 	RegKey(RegKey &&b) : h(b.h) { b.h = nullptr; }
-	RegKey(const char *k) {
-		auto	subkey	= strchr(k, '\\');
-		auto 	hive	= get_hive(subkey ? std::string(k, subkey - k) : k);
-		auto 	ret = ::RegOpenKeyExA(hive, subkey, 0, KEY_READ, &h);
+	RegKey(const wchar_t *k) {
+		auto	subkey	= wcschr(k, '\\');
+		auto 	hive	= get_hive(subkey ? std::wstring(k, subkey - k) : k);
+		auto 	ret = ::RegOpenKeyEx(hive, subkey, 0, KEY_READ, &h);
 		if (ret != ERROR_SUCCESS)
 			h = nullptr;
 	}
-	RegKey(HKEY hParent, const char *subkey) {
-		auto ret = ::RegOpenKeyExA(hParent, subkey, 0, KEY_READ, &h);
+	RegKey(HKEY hParent, const wchar_t *subkey) {
+		auto ret = ::RegOpenKeyEx(hParent, subkey, 0, KEY_READ, &h);
 		if (ret != ERROR_SUCCESS)
 			h = nullptr;
 	}
@@ -342,7 +346,7 @@ struct RegKey {
 	auto info() 				const { return Info(h); }
 
 	auto value(int i, BYTE *data, DWORD data_size) const {
-		char	name[MAX_VALUE_NAME];
+		wchar_t	name[MAX_VALUE_NAME];
 		DWORD 	name_size 	= MAX_VALUE_NAME;
 		DWORD	type		= 0;
 		auto 	ret		= ::RegEnumValue(h, i, name, &name_size, NULL, &type, data, &data_size);
@@ -351,7 +355,7 @@ struct RegKey {
 			: Value();
 	}
 
-	auto value(const char *name, BYTE *data, DWORD data_size) const {
+	auto value(const wchar_t *name, BYTE *data, DWORD data_size) const {
 		DWORD	type		= 0;
 		auto 	ret		= ::RegQueryValueEx(h, name, 0, &type, data, &data_size);
 		return ret == ERROR_SUCCESS
@@ -360,22 +364,22 @@ struct RegKey {
 	}
 
 	auto subkey(int i) const {
-		char	name[MAX_KEY_LENGTH];
+		wchar_t	name[MAX_KEY_LENGTH];
 		DWORD 	name_size	= MAX_KEY_LENGTH;
 		auto 	ret			= ::RegEnumKeyEx(h, i,
 			name, &name_size, NULL,
 			NULL, NULL,	//class
 			NULL//&ftLastWriteTime
 		);
-		return ret == ERROR_SUCCESS ? std::string(name) : std::string();
+		return ret == ERROR_SUCCESS ? std::wstring(name) : std::wstring();
 	}
 
-	auto set_value(const char *name, DWORD type, BYTE *data, DWORD size) {
+	auto set_value(const wchar_t *name, DWORD type, BYTE *data, DWORD size) {
 		auto ret = ::RegSetValueEx(h, name, 0, type, data, size);
 		return ret == ERROR_SUCCESS;
 	}
 
-	auto remove_value(const char *name) {
+	auto remove_value(const wchar_t *name) {
 		auto ret = ::RegDeleteValue(h, name);
 		return ret == ERROR_SUCCESS;
 	}
@@ -386,14 +390,14 @@ struct RegKey {
 //-----------------------------------------------------------------------------
 
 struct Reg {
+	HKEY 		hive				= nullptr;
 	HKEY 		h					= nullptr;
-	const char *file				= nullptr;
-	const char *subkey				= nullptr;
-
-	const char* value 				= nullptr;
+	const wchar_t *file				= nullptr;
+	const wchar_t *subkey			= nullptr;
+	const wchar_t* value 			= nullptr;
 	int			type 				= REG_SZ;
-	char* 		data 				= nullptr;
-	char 		separator 			= 0;
+	wchar_t*	data 				= nullptr;
+	wchar_t 	separator 			= 0;
 	bool 		all_subkeys 		= false;
 	bool 		all_values 			= false;
 	bool 		numeric_type 		= false;
@@ -404,21 +408,31 @@ struct Reg {
 	bool 		force 	 			= false;
 	REGSAM		sam					= 0;
 
-	int get_options(OP op, int argc, char *argv[]);
+	int get_options(OP op, int argc, wchar_t *argv[]);
 
-	void set_key(const char *k) {
+	void set_key(const wchar_t *k) {
+		std::wstring	host;
+		
 		if (k[0] == '\\' && k[1] == '\\') {
-			const char *host = k;
-			k = strchr(k, '\\') + 1;
+			auto k0 = k + 2;
+			k = wcschr(k + 2, '\\') + 1;
+			host = std::wstring(k0, k - 1);
 		}
 
-		subkey	= strchr(k, '\\');
-		h 		= get_hive(subkey ? std::string(k, subkey - k) : k);
+		subkey	= wcschr(k, '\\');
+		hive	= get_hive(subkey ? std::wstring(k, subkey - k) : k);
+
+		if (host.empty()) {
+			h = hive;
+		} else {
+			auto ret = RegConnectRegistry(host.c_str(), hive, &h);
+			if (ret != ERROR_SUCCESS)
+				h = nullptr;
+		}
 	}
 
 	auto get_keyname() {
-		const char *hive = hives[(intptr_t)h - 0x80000000][0];
-		std::string	key(hive);
+		std::wstring	key = hives[(intptr_t)hive - 0x80000000][0];;
 		if (subkey)
 			key = key + subkey;
 
@@ -441,14 +455,14 @@ struct Reg {
 };
 
 
-int Reg::get_options(OP op, int argc, char *argv[]) {
+int Reg::get_options(OP op, int argc, wchar_t *argv[]) {
 	for (int i = 2; i < argc; i++) {
 		if (argv[i][0] == '/') {
 			switch (argv[i][1]) {
 				case 'r':
-					if (strcmp(argv[i], "/reg:32") == 0)
+					if (wcscmp(argv[i], L"/reg:32") == 0)
 						sam |= KEY_WOW64_32KEY;
-					else if (strcmp(argv[i], "/reg:64") == 0)
+					else if (wcscmp(argv[i], L"/reg:64") == 0)
 						sam |= KEY_WOW64_32KEY;
 					else
 						return i;
@@ -457,7 +471,7 @@ int Reg::get_options(OP op, int argc, char *argv[]) {
 				case 'v':
 					switch (argv[i][2]) {
 						case 'e':
-							value = "";
+							value = L"";
 							break;
 						case 'a':
 							all_values = true;
@@ -473,7 +487,7 @@ int Reg::get_options(OP op, int argc, char *argv[]) {
 				case 't': {
 					auto name = argv[++i];
 					for (auto &t : types) {
-						if (strcmp(name, t) == 0) {
+						if (wcscmp(name, t) == 0) {
 							type = &t - types;
 							break;
 						}
@@ -594,15 +608,15 @@ int Reg::doDELETE() {
 }
 
 int Reg::doIMPORT() {
-	 std::ifstream stream(file);
+	 std::wifstream stream(file);
 	if (!stream) {
 		std::cerr << "Failed to open file: " << file << std::endl;
 		return 1;
 	}
 
-	std::string line;
+	std::wstring line, line2;
 	std::getline(stream, line);
-	if (line != "Windows Registry Editor Version 5.00")
+	if (line != L"Windows Registry Editor Version 5.00")
 		return 1;
 
 	RegKey	key;
@@ -610,6 +624,9 @@ int Reg::doIMPORT() {
 	// Parse key values and subkeys
 	while (std::getline(stream, line)) {
 		if (!line.empty()) {
+			while (line.back() == '\\' && std::getline(stream, line2))
+				line += line2;
+
 			if (line[0] == '[') {
 				key = RegKey(line.substr(1, line.length() - 2).c_str());
 			} else {
@@ -626,7 +643,7 @@ int Reg::doIMPORT() {
 	return 0;
 }
 
-void export_recurse(std::ostream &out, const RegKey &key, std::string keyname) {
+void export_recurse(std::wostream &out, const RegKey &key, std::wstring keyname) {
 	out << '[' << keyname << ']' << endl;
 
 	auto info 		= key.info();
@@ -652,17 +669,19 @@ void export_recurse(std::ostream &out, const RegKey &key, std::string keyname) {
 	for (int i = 0; i < info.num_subkeys; i++) {
 		auto name = key.subkey(i);
 		if (name.length())
-			export_recurse(out, RegKey(key.h, name.c_str()), keyname + '\\' + name);
+			export_recurse(out, RegKey(key.h, name.c_str()), keyname + L'\\' + name);
 	}
 
 }
 
 int Reg::doEXPORT() {
-	 std::ofstream stream(file);
+	 std::wofstream stream(file);
 	if (!stream) {
 		std::cerr << "Failed to create file: " << file << std::endl;
 		return 1;
 	}
+
+    stream.imbue(std::locale(std::locale(), new std::codecvt_utf8<wchar_t>));
 
 	stream << "Windows Registry Editor Version 5.00" << endl << endl;
 
@@ -679,7 +698,9 @@ int Reg::doEXPORT() {
 //	main
 //-----------------------------------------------------------------------------
 
-int main(int argc, char* argv[]) {
+int wmain(int argc, wchar_t* argv[]) {
+	_setmode(_fileno(stdout), _O_U8TEXT);
+
 #if 0
 	bool forever = true;
 	while (forever) {
@@ -696,7 +717,7 @@ int main(int argc, char* argv[]) {
 	OP op = BAD;
 
 	for (auto& i : ops) {
-		if (_stricmp(argv[1], i) == 0) {
+		if (_wcsicmp(argv[1], i) == 0) {
 			op = (OP)(&i - &ops[0]);
 			break;
 		}

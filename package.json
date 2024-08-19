@@ -33,6 +33,42 @@
 				}
 			]
 		},
+		"languages": [
+            {
+                "id": "reg",
+                "aliases": [
+                    "REG",
+                    "reg"
+                ],
+                "extensions": [
+                    ".reg",
+                    ".REG"
+                ],
+                "configuration": "./language//language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "reg",
+                "scopeName": "source.reg",
+                "path": "./language/syntax.reg.json"
+            }
+        ],
+		"configuration": {
+			"title": "Registry Editor",
+			"properties": {
+				"regedit.useCustomReg": {
+					"type": "boolean",
+					"default": false,
+					"description": "Run a custom version of reg.exe."
+				},
+				"regedit.regExecutable": {
+					"type": "string",
+					"description": "Specifies the path of the a reg.exe.",
+					"when": "config.regedit.useCustomReg"
+				}
+			}
+		},
 		"commands": [
 			{
 				"command": "regedit.copy",
@@ -94,7 +130,13 @@
 				"title": "Refresh",
 				"icon": "$(refresh)",
 				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.viewInReg",
+				"title": "View in Registry",
+				"category": "RegEdit"
 			}
+
 		],
 		"keybindings": [
 			{
@@ -182,6 +224,12 @@
 					"command": "regedit.export",
 					"when": "view == regedit-view && viewItem == 'key'",
 					"group": "edit"
+				}
+			],
+			"editor/context": [
+				{
+					"command": "regedit.viewInReg",
+					"when": "resourceLangId==reg"
 				}
 			]
 		}
