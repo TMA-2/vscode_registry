@@ -25,7 +25,7 @@
 		"reg/reg.cpp",
 		"reg/reg.exe",
 		"LICENSE.txt",
-		"CHANGELOG.txt"
+		"CHANGELOG.md"
 	],
 	"main": "./out/extension.js",
 	"contributes": {
@@ -243,7 +243,7 @@
 		"compile": "tsc -p ./",
 		"lint": "eslint \"src/**/*.ts\"",
 		"watch": "tsc -watch -p ./",
-		"publish": "vsce publish"
+		"publish": "vsce publish patch"
 	},
 	"devDependencies": {
 		"@types/node": "^18",

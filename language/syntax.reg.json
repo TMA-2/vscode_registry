@@ -42,8 +42,7 @@
         "values": {
             "patterns": [
                 {
-                    "begin": "^(.*?)=\\s*-",
-                    "end": "(?<!\\\\)$",
+                    "match": "^(.*?)=\\s*-",
                     "name": "keyword.deprecated.reg"
                 },
                 {

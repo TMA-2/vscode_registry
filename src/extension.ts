@@ -354,7 +354,8 @@ class RegFolding implements vscode.FoldingRangeProvider {
 //-----------------------------------------------------------------------------
 
 const key_re	= /^\s*\[-?(HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|HKEY_USERS|HKEY_CURRENT_CONFIG)(\\.*)?\]\s*(.*)$/di;
-const value_re 	= /^\s*(@|".+?"|([^=]+))(\s*=)?\s*-?(".*"|[dq]word:[0-9a-f]+|hex(\([0-9a-f]+\))?:[0-9a-f,\s]+)?\s*(.*)$/di;
+const value_re 	= /^\s*(@|".+?"|([^=]+))(\s*=)?\s*(-|".*"|[dq]word:[0-9a-f]+|hex(\([0-9a-f]+\))?:[0-9a-f,\s]+)?\s*(.*)$/di;
+const comment_re	= /^\s*;/;
 
 function regDiagnostics(doc: vscode.TextDocument) {
 	const diagnostics: vscode.Diagnostic[] = [];
@@ -363,10 +364,9 @@ function regDiagnostics(doc: vscode.TextDocument) {
 		diagnostics.push(new vscode.Diagnostic(range, message, severity));
 	}
 
-	function range(line:number, begin:number, end:number) {
-		return new vscode.Range(line, begin, line, end);
+	function range_all(line0:number, line1:number) {
+		return new vscode.Range(line0, 0, line1, doc.lineAt(line1).text.length);
 	}
-
 	function range_re(line:number, m: RegExpExecArray, i:number) {
 		let [begin, end] = m.indices ? m.indices[i] : [m.index, m[0].length];
 		let len = doc.lineAt(line).text.length;
@@ -388,7 +388,9 @@ function regDiagnostics(doc: vscode.TextDocument) {
 	for (let line = 0; line < doc.lineCount; line++) {
 		const	line0	= line;
 		let		text	= doc.lineAt(line).text;
-		const 	all		= range(line, 0, text.length);
+
+		if (comment_re.test(text))
+			continue;
 
 		while (text.endsWith('\\'))
 			text = text.slice(0, -1) + doc.lineAt(++line).text;
@@ -397,7 +399,7 @@ function regDiagnostics(doc: vscode.TextDocument) {
 			case 0:
 				if (text) {
 					if (text !== 'Windows Registry Editor Version 5.00' && text != 'REGEDIT4') {
-						add_error(all, "First line must be a valid version identifier");
+						add_error(range_all(line0, line), "First line must be a valid version identifier");
 					} else if (doc.lineAt(++line).text) {
 						add_error(new vscode.Range(line, 0, line, 0), "Second line must blank");
 					}
@@ -409,8 +411,8 @@ function regDiagnostics(doc: vscode.TextDocument) {
 				if (text) {
 					const m = key_re.exec(text);
 					if (!m)
-						add_error(all, "Not a legal key");
-					else if (m[3])
+						add_error(range_all(line0, line), "Not a legal key");
+					else if (m[3] && !comment_re.test(m[3]))
 						add_error(range_re(line0, m, 3), "Extra characters after key", vscode.DiagnosticSeverity.Warning);
 					state = 2;
 				}
@@ -420,9 +422,9 @@ function regDiagnostics(doc: vscode.TextDocument) {
 				if (text) {
 					const m = value_re.exec(text);
 					if (!m) {
-						add_error(all, "Unrecognised value");
+						add_error(range_all(line0, line), "Unrecognised value");
 					} else if (!m[1]) {
-						add_error(all, "Can't find value name");
+						add_error(range_all(line0, line), "Can't find value name");
 					} else {
 						if (m[2])
 							add_error(range_re(line0, m, 2), "value names should be within quotes", vscode.DiagnosticSeverity.Warning);
@@ -430,12 +432,10 @@ function regDiagnostics(doc: vscode.TextDocument) {
 						if (!m[3])
 							add_error(range_re(line0, m, 1), "Missing =");
 
-						if (m[6]) {
-							if (m[4])
-								add_error(range_re(line0, m, 6), "Extra characters after value", vscode.DiagnosticSeverity.Warning);
-							else
-								add_error(range_re(line0, m, 6), "Misformed data");
-						}
+						if (!m[4])
+							add_error(range_re(line0, m, 6), "Misformed data");
+						else if (m[6] && !comment_re.test(m[6]))
+							add_error(range_re(line0, m, 6), "Extra characters after value", vscode.DiagnosticSeverity.Warning);
 					}
 				} else {
 					state = 1;
@@ -444,7 +444,7 @@ function regDiagnostics(doc: vscode.TextDocument) {
 		}
 	}
 	if (state != 1)
-		add_error(range(doc.lineCount, 0, 0), "Must end with a blank line");
+		add_error(range_all(doc.lineCount - 1, doc.lineCount - 1), "Must end with a blank line");
 	return diagnostics;
 }
 

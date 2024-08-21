@@ -16,6 +16,12 @@
 				"isDefault": true
 			}
 		},
+        {
+            "type": "npm",
+            "script": "compile",
+            "problemMatcher": ["$tsc"],
+            "label": "npm: compile"
+        },
 		{
             "type": "shell",
             "label": "Build reg.exe",
@@ -54,6 +60,23 @@
                 "kind": "build",
                 "isDefault": true
             }
+        },
+        {
+            "type": "shell",
+            "label": "prepublish",
+            "command": "git add . & git commit -m \"Automatic commit\"",
+            "problemMatcher": [],
+            "dependsOn": [
+                "npm: compile",
+                "Build Release reg.exe"
+            ]
+        },
+        {
+            "type": "shell",
+            "label": "PUBLISH",
+            "command": "vsce publish patch",
+            "dependsOn": "prepublish",
+            "problemMatcher": []
         }
 
 	]

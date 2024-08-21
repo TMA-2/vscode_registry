@@ -816,7 +816,7 @@ int Reg::doIMPORT() {
 	// Parse key values and subkeys
 	while (win_getline(stream, line)) {
 		line = trim(line);
-		if (!line.empty()) {
+		if (!line.empty() && line[0] != ';') {
 			while (line.back() == '\\' && win_getline(stream, line2)) {
 				line.pop_back();
 				line += line2;
@@ -824,7 +824,9 @@ int Reg::doIMPORT() {
 
 			if (line[0] == '[') {
 				deleted = line[1] == '-';
-				ParsedKey	parsed(line.substr(1 + deleted, line.length() - 2).c_str());
+				auto	open	= 1 + deleted;
+				auto	close	= line.find_first_of(']');
+				ParsedKey	parsed(line.substr(open, close - open).c_str());
 
 				if (deleted) {
 					if (auto ret = parsed.delete_key(access))
