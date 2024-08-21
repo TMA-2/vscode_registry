@@ -21,6 +21,9 @@
 	"files": [
 		"out/*",
 		"assets/*",
+		"language/*",
+		"reg/reg.cpp",
+		"reg/reg.exe",
 		"LICENSE.txt"
 	],
 	"main": "./out/extension.js",
@@ -64,6 +67,7 @@
 				},
 				"regedit.regExecutable": {
 					"type": "string",
+					"default": "${extensionPath}/reg/reg.exe",
 					"description": "Specifies the path of the a reg.exe.",
 					"when": "config.regedit.useCustomReg"
 				}

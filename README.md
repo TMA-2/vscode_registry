@@ -1,26 +1,24 @@
 # Visual Studio Code Registry Editor
 
-This extension adds a registry editor to the explorer.
-
-To use, enable 'Registry' in the Explorer's context menu.
+This extension adds a registry editor to the explorer, and general support for .reg files.
 
 ![Main window screenshot](assets/readme.png)
 
 
 Keys and Values have context menus allowing deletion, renaming, etc.
 
-Keys can also be edited via a temporary .reg file. When the reg file is saved its contents are automatically imported into the registry and the view updates accordingly.
+The 'Edit' option on keys generates a .reg file which, when saved, is automatically imported into the registry, updating the views accordingly.
 
 ## What's New
 
-- Icons and a two-letter 'badge' to help identify the different value types (REG_SZ, REG_DWORD, etc).
-- Remote Registry support.
-- Copy context command to copy keys and values to the clipboard in a human-readable format.\
-    Copy (strict) (available by holding ALT when right-clicking an item) copies values in a format compatible with Windows Registry Editor Version 5.00. This means things like REG_MULTI_SZ are long hex strings.
+It seems administrators can lock people out of using reg.exe, even to query the registry. As a workaround I've added a setting for using an alternative executable, which has to be largely compatible with reg's command line options.
+
+If you're wondering where on earth you could find such an executable, I supply one within this very extension!
+
+I've added 'reg' as a proper language id to vscode, with syntax-highlighting, folding, and squiggles.
+When editing reg files the context menu includes an option for locating a key or value in the registry view.
 
 ## More information
-
-I created this extension really to test the registry library that I needed for something else. I've extracted that test into its own extension in case it's of use to anyone.
 
 This extension is dependent only on the vscode API.
 
