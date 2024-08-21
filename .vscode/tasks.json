@@ -64,7 +64,7 @@
         {
             "type": "shell",
             "label": "prepublish",
-            "command": "git add . & git commit -m \"Automatic commit\"",
+            "command": "git add . & npm version patch --force",
             "problemMatcher": [],
             "dependsOn": [
                 "npm: compile",
@@ -74,9 +74,9 @@
         {
             "type": "shell",
             "label": "PUBLISH",
-            "command": "vsce publish patch",
-            "dependsOn": "prepublish",
-            "problemMatcher": []
+            "command": "vsce publish",
+            "problemMatcher": [],
+            "dependsOn": "prepublish"
         }
 
 	]
