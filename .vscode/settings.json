@@ -1,9 +1,4 @@
 {
-    "files.exclude": {
-        "hidden": true,
-        "node_modules": true,
-        "out": true
-    },
     "search.exclude": {
         "hidden": true,
         "node_modules": true,
@@ -58,6 +53,17 @@
         "xlocmon": "cpp",
         "xloctime": "cpp",
         "xtree": "cpp",
-        "iomanip": "cpp"
+        "iomanip": "cpp",
+        "cctype": "cpp",
+        "compare": "cpp",
+        "format": "cpp",
+        "algorithm": "cpp",
+        "atomic": "cpp",
+        "bit": "cpp",
+        "charconv": "cpp",
+        "clocale": "cpp",
+        "concepts": "cpp",
+        "iterator": "cpp",
+        "optional": "cpp"
     }
 }

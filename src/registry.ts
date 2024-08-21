@@ -466,8 +466,8 @@ interface KeyBase {
 }
 
 export interface Key extends KeyBase {
+	then:		(func: (key:any)=>Key)=>Key;
 	[key:string|symbol]:any;
-	then:		(func: ()=>Key)=>Key;
 	[Symbol.iterator]: () => any;
 }
 
@@ -565,26 +565,23 @@ export async function importreg(file: string, view?: string, dirty?: KeyBase[]) 
 	if (view)
 		args.push('/reg:' + view);
 
-	return new Promise<Process>((resolve, reject) => new Process(reg_exec, args, reject, resolve))
-		.then(() => {
-			if (dirty) {
-				const parents = new Set<KeyImp>();
-				for (const i of dirty) {
-					const parent = i.parent;
-					parents.add(parent);
-					delete parent._keys[i.name];
-				}
-				Promise.all(Array.from(parents).map(p => p.reread())).then(() => true);
-
-			} else {
-				const hosts = view === '32' ? hosts32 : hosts64;
-				for (const i in hosts)
-					delete hosts[i];
+	return new Promise<Process>((resolve, reject) => new Process(reg_exec, args, reject, resolve)).then(() => {
+		if (dirty) {
+			const parents = new Set<KeyImp>();
+			for (const i of dirty) {
+				const parent = i.parent;
+				parents.add(parent);
+				delete parent._keys[i.name];
 			}
-			return true;
-		},
-		() => false
-	);
+			Promise.all(Array.from(parents).map(p => p.reread())).then(() => true);
+
+		} else {
+			const hosts = view === '32' ? hosts32 : hosts64;
+			for (const i in hosts)
+				delete hosts[i];
+		}
+		return true;
+	});
 }
 
 export async function set_exec(file?: string) {

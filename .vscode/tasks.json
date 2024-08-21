@@ -24,8 +24,27 @@
                 "-g",
                 "reg\\reg.cpp",
                 "-DUNICODE", "-D_UNICODE", "-DWIN32_LEAN_AND_MEAN",
-                "-Od",
                 "-o", "reg\\reg.exe",
+                "/link", "advapi32.lib"
+            ],
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "type": "shell",
+            "label": "Build Release reg.exe",
+            "command": "clang-cl",
+            "args": [
+                "reg\\reg.cpp",
+                "-DUNICODE", "-D_UNICODE", "-DWIN32_LEAN_AND_MEAN",
+                "-O2",
+                "-o", "reg\\reg.exe",
+                "/MD",
                 "/link", "advapi32.lib"
             ],
             "problemMatcher": [
@@ -36,5 +55,6 @@
                 "isDefault": true
             }
         }
+
 	]
 }

@@ -65,27 +65,79 @@ async function yesno(message: string) {
 }
 
 //-----------------------------------------------------------------------------
+//	File System Stub
+//-----------------------------------------------------------------------------
+
+class RegFS implements vscode.FileSystemProvider {
+	private _onDidChangeFile = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
+	readonly onDidChangeFile: vscode.Event<vscode.FileChangeEvent[]> = this._onDidChangeFile.event;
+
+	constructor(public view: RegEditProvider) {}
+
+	public static key_to_uri(keypath: string) {
+		return Uri.parse(`reg:/${keypath.replace(/\\/g,'/')}.reg`);
+	}
+	public static value_to_uri(keypath: string, name:string, type:string) {
+		return Uri.parse(`reg:/${keypath.replace(/\\/g,'/')}/${name}?type=${type}`);
+	}
+	public static uri_to_key(uri: Uri) {
+		return uri.path.slice(1, -4).replace(/\//g, '\\');
+	}
+
+	async stat(uri: Uri): Promise<vscode.FileStat> {
+		return {
+			type: vscode.FileType.File,
+			ctime: Date.now(),
+			mtime: Date.now(),
+			size: 0,
+		};
+	}
+
+	async readFile(uri: Uri): Promise<Uint8Array> {
+		const file = path.join(os.tmpdir(), 'temp.reg');
+		return await registry.getKey(RegFS.uri_to_key(uri)).export(file).then(() => vscode.workspace.fs.readFile(Uri.file(file)));
+	}
+
+	async writeFile(uri: Uri, content: Uint8Array, options: { create: boolean, overwrite: boolean }): Promise<void> {
+		const file = path.join(os.tmpdir(), 'temp.reg');
+		await vscode.workspace.fs.writeFile(Uri.file(file),content);
+		registry.importreg(file).then(() => {
+			this.view.recreate();
+			this._onDidChangeFile.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+		}).catch(err => vscode.window.showErrorMessage(`${err}`));
+
+	}
+
+	//stubs
+	readDirectory(uri: Uri): [string, vscode.FileType][] { return []; }
+	createDirectory(uri: Uri): void {}
+	delete(uri: Uri): void {}
+	rename(oldUri: Uri, newUri: Uri, options: { overwrite: boolean }): void {}
+	watch(uri: Uri): vscode.Disposable { return new vscode.Disposable(() => {}); }
+}
+
+//-----------------------------------------------------------------------------
 //	Tree View
 //-----------------------------------------------------------------------------
 
 type TypeDecoration = {
-	icon:	string,
-	color:	string,
-	badge:	string,
+	icon?:	string,
+	color?:	string,
+	badge?:	string,
 }
 
 const decorations : Record<string, TypeDecoration> = {
-	'NONE':   						{ icon: 'file-binary',		color: '',				badge: ''},
+	'NONE':   						{ icon: 'file-binary'},
 	'SZ': 							{ icon: 'symbol-text',		color: 'charts.red',	badge: 'SZ'},
 	'EXPAND_SZ':  					{ icon: 'symbol-text',		color: 'charts.yellow',	badge: 'ES'},
 	'BINARY': 						{ icon: 'file-binary',		color: 'charts.purple',	badge: 'BI'},
 	'DWORD':  						{ icon: 'symbol-number',	color: 'charts.orange',	badge: 'DW'},
-	'DWORD_BIG_ENDIAN':   			{ icon: 'symbol-number',	color: '',				badge: 'BE'},
-	'LINK':   						{ icon: 'file-binary',		color: '',				badge: 'L'},
+	'DWORD_BIG_ENDIAN':   			{ icon: 'symbol-number',							badge: 'BE'},
+	'LINK':   						{ icon: 'file-binary',								badge: 'L'},
 	'MULTI_SZ':   					{ icon: 'symbol-text',		color: 'charts.blue',	badge: 'MS'},
-	'RESOURCE_LIST':  				{ icon: 'file-binary',		color: '',				badge: 'RL'},
-	'FULL_RESOURCE_DESCRIPTOR':		{ icon: 'file-binary',		color: '',				badge: 'RD'},
-	'RESOURCE_REQUIREMENTS_LIST':	{ icon: 'file-binary',		color: '',				badge: 'RR'},
+	'RESOURCE_LIST':  				{ icon: 'file-binary',								badge: 'RL'},
+	'FULL_RESOURCE_DESCRIPTOR':		{ icon: 'file-binary',								badge: 'RD'},
+	'RESOURCE_REQUIREMENTS_LIST':	{ icon: 'file-binary',								badge: 'RR'},
 	'QWORD':  						{ icon: 'symbol-number',	color: 'charts.green',	badge: 'QW'},
 };
 
@@ -95,12 +147,11 @@ abstract class TreeItem extends vscode.TreeItem {
 	constructor(
 		public parent: TreeItem | null,
 		label: string | vscode.TreeItemLabel,
-		collapsibleState: TreeItemCollapsibleState = TreeItemCollapsibleState.None,
-		path?: string,
+		contextValue: string,
+		collapsibleState: TreeItemCollapsibleState = TreeItemCollapsibleState.None
 	) {
 		super(label, collapsibleState);
-		if (path)
-			this.resourceUri = Uri.file(path);
+		this.contextValue = contextValue;
 		this.command = {
 			command: 'regedit.select',
 			title: 'Select',
@@ -121,20 +172,19 @@ abstract class TreeItem extends vscode.TreeItem {
 
 class ValueTreeItem extends TreeItem {
     constructor(parent : KeyTreeItem, public name: string, public data: registry.Data) {
-		super(parent, `${name} = ${registry.data_to_regstring(data)}`, TreeItemCollapsibleState.None);
+		super(parent, `${name} = ${registry.data_to_regstring(data)}`, 'value', TreeItemCollapsibleState.None);
+
 		const type 			= data.constructor.name;
 		const decoration	= decorations[type] ?? decorations.NONE;
-		this.contextValue 	= 'value';
 		if (decoration.icon)
-			this.iconPath	= new vscode.ThemeIcon(decoration.icon, decoration.color ? new vscode.ThemeColor(decoration.color) : undefined);
-		this.resourceUri	= Uri.parse(`reg:/${parent.key.path.replace(/\\/g,'/')}/${name}?type=${type}`);
+			this.iconPath	= new vscode.ThemeIcon(decoration.icon, decoration.color && new vscode.ThemeColor(decoration.color));
+		this.resourceUri	= RegFS.value_to_uri(parent.key.path, name, type);
 	}
 }
 
 class KeyTreeItem extends TreeItem {
     constructor(parent : TreeItem | null, public key: registry.Key) {
-		super(parent, key.name, TreeItemCollapsibleState.Collapsed);
-		this.contextValue	= 'key';
+		super(parent, key.name, 'key', TreeItemCollapsibleState.Collapsed);
 	}
 	async createChildren(): Promise<TreeItem[]> {
 		const children : TreeItem[] = [];
@@ -150,10 +200,8 @@ class KeyTreeItem extends TreeItem {
 
 class HostTreeItem extends TreeItem {
 	constructor(parent : TreeItem | null, public host: string) {
-		super(parent, host || 'Local', TreeItemCollapsibleState.Expanded);
-		this.contextValue	= 'host';
+		super(parent, host || 'Local', 'host', TreeItemCollapsibleState.Expanded);
 		this.iconPath		= new vscode.ThemeIcon('device-desktop');
-		
 	}
 	async createChildren(): Promise<TreeItem[]> {
 		const children : TreeItem[] = [];
@@ -251,11 +299,11 @@ export class RegEditProvider implements vscode.TreeDataProvider<TreeItem>, vscod
 		if (uri.scheme === 'reg') {
 			const decoration = decorations[uri.query.substring(5)] ?? decorations.NONE;
 			if (decoration.badge)
-			return {
-				badge: decoration.badge,
-				//color: new vscode.ThemeColor(decoration.color), 
-				// tooltip: ""
-			};
+				return {
+					badge: decoration.badge,
+					//color: new vscode.ThemeColor(decoration.color), 
+					// tooltip: ""
+				};
 		}
 		return null;  // to get rid of the custom fileDecoration
     }
@@ -280,48 +328,6 @@ export class RegEditProvider implements vscode.TreeDataProvider<TreeItem>, vscod
 }
 
 //-----------------------------------------------------------------------------
-//	File System Stub
-//-----------------------------------------------------------------------------
-
-class RegFS implements vscode.FileSystemProvider {
-	private _onDidChangeFile = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
-	readonly onDidChangeFile: vscode.Event<vscode.FileChangeEvent[]> = this._onDidChangeFile.event;
-
-	constructor(public view: RegEditProvider) {}
-
-	async stat(uri: Uri): Promise<vscode.FileStat> {
-		return {
-			type: vscode.FileType.File,
-			ctime: Date.now(),
-			mtime: Date.now(),
-			size: 0,
-		};
-	}
-
-	async readFile(uri: Uri): Promise<Uint8Array> {
-		console.log(`read ${uri}`);
-		const file = path.join(os.tmpdir(), 'temp.reg');
-		return await registry.getKey(uri.path.slice(1, -4)).export(file).then(() => vscode.workspace.fs.readFile(Uri.file(file)));
-	}
-
-	async writeFile(uri: Uri, content: Uint8Array, options: { create: boolean, overwrite: boolean }): Promise<void> {
-		const file = path.join(os.tmpdir(), 'temp.reg');
-		await vscode.workspace.fs.writeFile(Uri.file(file),content);
-		registry.importreg(file).then(() => {
-			this.view.recreate();
-			this._onDidChangeFile.fire([{ type: vscode.FileChangeType.Changed, uri }]);
-		});
-	}
-
-	//stubs
-	readDirectory(uri: Uri): [string, vscode.FileType][] { return []; }
-	createDirectory(uri: Uri): void {}
-	delete(uri: Uri): void {}
-	rename(oldUri: Uri, newUri: Uri, options: { overwrite: boolean }): void {}
-	watch(uri: Uri): vscode.Disposable { return new vscode.Disposable(() => {}); }
-}
-
-//-----------------------------------------------------------------------------
 //	Folding range provider
 //-----------------------------------------------------------------------------
 
@@ -342,6 +348,104 @@ class RegFolding implements vscode.FoldingRangeProvider {
 
 		return ranges;
 	}
+}
+//-----------------------------------------------------------------------------
+//	Diagnostics
+//-----------------------------------------------------------------------------
+
+const key_re	= /^\s*\[-?(HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|HKEY_USERS|HKEY_CURRENT_CONFIG)(\\.*)?\]\s*(.*)$/di;
+const value_re 	= /^\s*(@|".+?"|([^=]+))(\s*=)?\s*-?(".*"|[dq]word:[0-9a-f]+|hex(\([0-9a-f]+\))?:[0-9a-f,\s]+)?\s*(.*)$/di;
+
+function regDiagnostics(doc: vscode.TextDocument) {
+	const diagnostics: vscode.Diagnostic[] = [];
+
+	function add_error(range: vscode.Range, message: string, severity = vscode.DiagnosticSeverity.Error) {
+		diagnostics.push(new vscode.Diagnostic(range, message, severity));
+	}
+
+	function range(line:number, begin:number, end:number) {
+		return new vscode.Range(line, begin, line, end);
+	}
+
+	function range_re(line:number, m: RegExpExecArray, i:number) {
+		let [begin, end] = m.indices ? m.indices[i] : [m.index, m[0].length];
+		let len = doc.lineAt(line).text.length;
+		while (begin > len) {
+			begin	-= len - 1;
+			end		-= len - 1;
+			len 	= doc.lineAt(++line).text.length;
+		}
+		let line2 = line;
+		while (end > len) {
+			end		-= len - 1;
+			len 	= doc.lineAt(++line2).text.length;
+		}
+		return new vscode.Range(line, begin, line2, end);
+	}
+
+	let	state = 0;
+
+	for (let line = 0; line < doc.lineCount; line++) {
+		const	line0	= line;
+		let		text	= doc.lineAt(line).text;
+		const 	all		= range(line, 0, text.length);
+
+		while (text.endsWith('\\'))
+			text = text.slice(0, -1) + doc.lineAt(++line).text;
+
+		switch (state) {
+			case 0:
+				if (text) {
+					if (text !== 'Windows Registry Editor Version 5.00' && text != 'REGEDIT4') {
+						add_error(all, "First line must be a valid version identifier");
+					} else if (doc.lineAt(++line).text) {
+						add_error(new vscode.Range(line, 0, line, 0), "Second line must blank");
+					}
+					state = 1;
+				}
+				break;
+
+			case 1:
+				if (text) {
+					const m = key_re.exec(text);
+					if (!m)
+						add_error(all, "Not a legal key");
+					else if (m[3])
+						add_error(range_re(line0, m, 3), "Extra characters after key", vscode.DiagnosticSeverity.Warning);
+					state = 2;
+				}
+				break;
+
+			case 2: 
+				if (text) {
+					const m = value_re.exec(text);
+					if (!m) {
+						add_error(all, "Unrecognised value");
+					} else if (!m[1]) {
+						add_error(all, "Can't find value name");
+					} else {
+						if (m[2])
+							add_error(range_re(line0, m, 2), "value names should be within quotes", vscode.DiagnosticSeverity.Warning);
+
+						if (!m[3])
+							add_error(range_re(line0, m, 1), "Missing =");
+
+						if (m[6]) {
+							if (m[4])
+								add_error(range_re(line0, m, 6), "Extra characters after value", vscode.DiagnosticSeverity.Warning);
+							else
+								add_error(range_re(line0, m, 6), "Misformed data");
+						}
+					}
+				} else {
+					state = 1;
+				}
+				break;
+		}
+	}
+	if (state != 1)
+		add_error(range(doc.lineCount, 0, 0), "Must end with a blank line");
+	return diagnostics;
 }
 
 //-----------------------------------------------------------------------------
@@ -382,16 +486,37 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	}
 
+	//settings
 	get_settings();
-	const configWatcher = vscode.workspace.onDidChangeConfiguration(event => {
+	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
 		if (event.affectsConfiguration('regedit'))
 			get_settings();
-	});
+	}));
 
 	const regedit = new RegEditProvider;
+
+	//folding
 	context.subscriptions.push(vscode.languages.registerFoldingRangeProvider('reg', new RegFolding));
 
+	//diagnostics
+	const diagnostics = vscode.languages.createDiagnosticCollection('reg');
+	context.subscriptions.push(diagnostics);
 
+	const doc = vscode.window.activeTextEditor?.document;
+	if (doc?.languageId === 'reg')
+		diagnostics.set(doc.uri, regDiagnostics(doc));
+
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(e => {
+		if (e && e.document.languageId == 'reg')
+			diagnostics.set(e.document.uri, regDiagnostics(e.document));
+	}));
+	context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(e => {
+		if (e && e.document.languageId == 'reg')
+			diagnostics.set(e.document.uri, regDiagnostics(e.document));
+	}));
+	context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(doc => diagnostics.delete(doc.uri)));
+  
+	//commands
 	registerCommand("regedit.select", async (item: TreeItem) => {
 		selected = item;
 	});
@@ -420,7 +545,7 @@ export function activate(context: vscode.ExtensionContext) {
 			try_reg(() => parent.key.setValue(item.name, data2.parse(data!)).then(() => regedit?.recreate(parent)));
 
 		} else if (item instanceof KeyTreeItem) {
-			const document = await vscode.workspace.openTextDocument(Uri.parse(`reg:/${item.key}.reg`));
+			const document = await vscode.workspace.openTextDocument(RegFS.key_to_uri(item.key.path));
 			await vscode.window.showTextDocument(document, {viewColumn: vscode.ViewColumn.Active});
 		}
 	});
@@ -504,11 +629,11 @@ export function activate(context: vscode.ExtensionContext) {
 		if (typeof(item) == 'string') {
 			const split = item.lastIndexOf('\\');
 			const key	= await registry.getKey(item.substring(0, split));
-			const base	= item.substring(split + 1);
-			if (base in key)
-				delete key[base];
+			const name	= item.substring(split + 1);
+			if (name in key)
+				delete key[name];
 			else
-				key.deleteValue(base);
+				key.deleteValue(name);
 			
 		} else if (item instanceof HostTreeItem) {
 			regedit.removeHost(item.host);
@@ -540,8 +665,9 @@ export function activate(context: vscode.ExtensionContext) {
 		let parent:	KeyTreeItem | undefined;
 
 		if (typeof(item) == 'string') {
-			key		= await registry.getKey(path.dirname(item));
-			name	= path.basename(item);
+			const split = item.lastIndexOf('\\');
+			key		= await registry.getKey(item.substring(0, split));
+			name	= item.substring(split + 1);
 			if (name in key) {
 				key		= key[value];
 				value	= '';
@@ -620,7 +746,6 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	registerTextEditorCommand("regedit.viewInReg", async editor => {
-
 		const treeView = vscode.window.createTreeView("regedit-view", {treeDataProvider: regedit});
 
 		const sel = editor.selection;

@@ -23,7 +23,7 @@
 			"type":"cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/reg/reg.exe",
-            "args": ["export", "\\\\Threadripper\\HKCU\\testkey", "${workspaceFolder}\\test.reg"],//,"/v","name3","/t","REG_DWORD","/d","123"],
+            "args": ["export", "hkcu\\testkey", "test.reg"],
             "cwd": "${workspaceFolder}/reg",
 			"preLaunchTask": "Build reg.exe"
 		},

@@ -239,7 +239,7 @@
 		"compile": "tsc -p ./",
 		"lint": "eslint \"src/**/*.ts\"",
 		"watch": "tsc -watch -p ./",
-		"publish": "vsce publish minor"
+		"publish": "vsce publish"
 	},
 	"devDependencies": {
 		"@types/node": "^18",

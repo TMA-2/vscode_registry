@@ -3,3 +3,5 @@ node_modules
 hidden
 .vscode-test/
 *.vsix
+*.ilk
+*.pdb
