@@ -3,7 +3,7 @@
 	"displayName": "Registry Editor",
 	"description": "A Registry Editor for VSCode",
 	"icon": "assets/icon.png",
-	"version": "0.3.0",
+	"version": "0.4.0",
 	"publisher": "isopodlabs",
 	"repository": "https://github.com/adrianstephens/vscode_registry",
 	"engines": {
@@ -37,26 +37,26 @@
 			]
 		},
 		"languages": [
-            {
-                "id": "reg",
-                "aliases": [
-                    "REG",
-                    "reg"
-                ],
-                "extensions": [
-                    ".reg",
-                    ".REG"
-                ],
-                "configuration": "./language//language-configuration.json"
-            }
-        ],
-        "grammars": [
-            {
-                "language": "reg",
-                "scopeName": "source.reg",
-                "path": "./language/syntax.reg.json"
-            }
-        ],
+			{
+				"id": "reg",
+				"aliases": [
+					"REG",
+					"reg"
+				],
+				"extensions": [
+					".reg",
+					".REG"
+				],
+				"configuration": "./language//language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "reg",
+				"scopeName": "source.reg",
+				"path": "./language/syntax.reg.json"
+			}
+		],
 		"configuration": {
 			"title": "Registry Editor",
 			"properties": {
@@ -140,7 +140,6 @@
 				"title": "View in Registry",
 				"category": "RegEdit"
 			}
-
 		],
 		"keybindings": [
 			{
