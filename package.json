@@ -24,7 +24,8 @@
 		"language/*",
 		"reg/reg.cpp",
 		"reg/reg.exe",
-		"LICENSE.txt"
+		"LICENSE.txt",
+		"CHANGELOG.txt"
 	],
 	"main": "./out/extension.js",
 	"contributes": {

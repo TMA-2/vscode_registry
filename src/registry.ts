@@ -560,6 +560,24 @@ export function getKey(key:string, view?:string): Key {
 	return MakeKey(getRawKey(key, view));
 }
 
+export function reset(view?: string, dirty?: KeyBase[]) {
+	if (dirty) {
+		for (const i of dirty) {
+			const parent = i.parent;
+			delete parent._keys[i.name];
+		}
+	} else {
+		const hosts = view === '32' ? hosts32 : hosts64;
+		for (const i in hosts)
+			delete hosts[i];
+		if (!view) {
+			for (const i in hosts32)
+				delete hosts32[i];
+		}
+	}
+}
+
+
 export async function importreg(file: string, view?: string, dirty?: KeyBase[]) : Promise<boolean> {
 	const args = ['IMPORT', file];
 	if (view)

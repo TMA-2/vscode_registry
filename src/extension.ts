@@ -21,10 +21,10 @@ function BOMtoEncoding(bytes: Uint8Array): string {
 		: 	'utf-8';
 }
 
-function loadTextFile(file: string): Thenable<string> {
+function loadTextFile(file: string) {
 	return vscode.workspace.fs.readFile(Uri.file(file)).then(
 		bytes => new TextDecoder(BOMtoEncoding(bytes)).decode(bytes),
-		error => console.log(`Failed to load ${file} : ${error}`)
+		error => (console.log(`Failed to load ${file} : ${error}`), '')
 	);
 }
 
@@ -522,6 +522,7 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	registerCommand("regedit.refresh", async () => {
+		registry.reset();
 		regedit?.recreate();
 	});
 
@@ -535,7 +536,7 @@ export function activate(context: vscode.ExtensionContext) {
 		if (item instanceof ValueTreeItem) {
 			const old_data = item.data;
 			if (!data) {
-				data = await vscode.window.showInputBox({prompt: 'Enter the new value', value: old_data.toString()});
+				data = await vscode.window.showInputBox({prompt: 'Enter the new value', value: old_data.value.toString()});
 				if (!data)
 					return;
 			}

@@ -29,12 +29,12 @@ auto trim(const std::wstring &s) {
 
 auto startsWith(const std::wstring &a, const wchar_t *b) {
 	auto n = wcslen(b);
-	return wcsncmp(&a[0], b, n);
+	return wcsncmp(&a[0], b, n) == 0;
 }
 
-auto endWith(const std::wstring &a, const wchar_t *b) {
+auto endsWith(const std::wstring &a, const wchar_t *b) {
 	auto n = wcslen(b);
-	return wcsncmp(&*a.end() - n, b, n);
+	return wcsncmp(&*a.end() - n, b, n) == 0;
 }
 
 auto unescape(const wchar_t *s, wchar_t *dest, char separator = 0) {
@@ -43,6 +43,7 @@ auto unescape(const wchar_t *s, wchar_t *dest, char separator = 0) {
 		if (c == '\\' && s[0]) {
 			switch (c = *s++) {
 				case '\\': break;
+				case '"': break;
 				case '0': c = '\0'; break;
 				case 'n': c = '\n'; break;
 				case 'r': c = '\r'; break;
@@ -64,11 +65,11 @@ auto escape(const wchar_t *s, size_t size, wchar_t *dest, char separator = 0) {
 		auto c = *s;
 		switch (c) {
 			case '\\': *p++ = '\\'; break;
+			case '"':  *p++ = '\\'; break;
 			case '\0': *p++ = '\\'; c = '0'; break;
 			case '\n': *p++ = '\\'; c = 'n'; break;
 			case '\r': *p++ = '\\'; c = 'r'; break;
 			case '\t': *p++ = '\\'; c = 't'; break;
-			case '"': *p++ = '\\'; break;
 			default:
 				if (c == separator) {
 					*p++ = '\\';
@@ -346,7 +347,7 @@ void write_command_data(BYTE *data, DWORD size, TYPE type, char separator) {
 		case TYPE::EXPAND_SZ:
 		case TYPE::MULTI_SZ: {
 			auto p = (wchar_t*)malloc(size * 2);
-			escape((const wchar_t*)data, size / 2 - 1, (wchar_t*)p, separator);
+			escape((const wchar_t*)data, size / 2 - (type == TYPE::MULTI_SZ ? 2 : 1), (wchar_t*)p, separator);
 			out << p << endl; 
 			free(p);
 			break;
@@ -449,12 +450,12 @@ size_t parse_reg_data(const std::wstring &line, TYPE &type, BYTE *data) {
 
 	} else if (startsWith(line, L"dword:")) {
 		type = TYPE::DWORD;
-		*((DWORD*)data) = wcstoul(&line[5], nullptr, 16);
+		*((DWORD*)data) = wcstoul(&line[6], nullptr, 16);
 		return 4;
 
 	} else if (startsWith(line, L"qword:")) {
 		type = TYPE::QWORD;
-		*((uint64_t*)data) = wcstoull(&line[5], nullptr, 16);
+		*((uint64_t*)data) = wcstoull(&line[6], nullptr, 16);
 		return 8;
 
 	} else if (startsWith(line, L"hex")) {
@@ -462,9 +463,8 @@ size_t parse_reg_data(const std::wstring &line, TYPE &type, BYTE *data) {
 	 	type = TYPE::BINARY;
 
 		if (p[0] == '(') {
-			type = (TYPE)wcstoul(p + 1, nullptr, 16);
-			while (*p && *p != ')')
-				++p;
+			type = (TYPE)wcstoul(p + 1, (wchar_t**)&p, 16);
+			++p;
 		}
 
 		if (p[0] == ':')
@@ -472,12 +472,12 @@ size_t parse_reg_data(const std::wstring &line, TYPE &type, BYTE *data) {
 
 		auto d = data;
 		for (;;) {
-			auto d0 = hexchar(p[0]);
-			auto d1 = hexchar(p[1]);
-			if (d0 < 0 || d1 < 0)
+			wchar_t	*p2;
+			auto v = wcstoul(p, &p2, 16);
+			if (p == p2)
 				break;
-			*d++ = (d0 << 4) | d1;
-			p += 2;
+			*d++	= v;
+			p 		= p2;
 			if (*p == ',')
 				++p;
 		}
@@ -620,14 +620,19 @@ struct ParsedKey {
 		}
 		return h;
 	}
-	RegKey get_key(REGSAM sam = KEY_READ) {
-		auto h = get_rootkey();
-		return h ? RegKey(h, subkey + !!subkey, sam) : RegKey();
-	}
-
 	auto get_keyname() {
 		std::wstring	key = hives[(int)hive][0];
 		return subkey ? key + subkey : key;
+	}
+
+	auto open_key(REGSAM sam, HKEY *h) {
+		return RegOpenKeyEx(get_rootkey(), subkey + !!subkey, 0, sam, h);
+	}
+	auto delete_key(REGSAM sam) {
+		return RegDeleteKeyEx(get_rootkey(), subkey + !!subkey, sam, 0);
+	}
+	auto create_key(REGSAM sam, HKEY *h) {
+		return RegCreateKeyEx(get_rootkey(), subkey + !!subkey, 0, NULL, REG_OPTION_NON_VOLATILE, sam, NULL, h, NULL);
 	}
 };
 
@@ -681,9 +686,9 @@ struct Reg {
 
 int Reg::doQUERY() {
 	ParsedKey	parsed(key);
-	RegKey	r = parsed.get_key(KEY_READ | get_sam());
-	if (!r)
-		return ERROR_INVALID_FUNCTION;//"ERROR: The system was unable to find the specified registry key or value.";
+	HKEY		h;
+	if (auto ret = parsed.open_key(KEY_READ | get_sam(), &h))
+		return ret;
 
 	wchar_t separator = L'\0';
 	if (sep) {
@@ -692,6 +697,7 @@ int Reg::doQUERY() {
 		separator = sep[0];
 	}
 
+	RegKey	r(h);
 	auto info 		= r.info();
 	auto keyname	= parsed.get_keyname();
 	auto tab		= "	";
@@ -735,7 +741,7 @@ int Reg::doADD() {
 	auto 		access = KEY_ALL_ACCESS | get_sam();
 	HKEY		h;
 
-	auto ret = RegCreateKeyEx(parsed.get_rootkey(), parsed.subkey + !!parsed.subkey, 0, NULL, REG_OPTION_NON_VOLATILE, access, NULL, &h, NULL);
+	auto ret = parsed.create_key(access, &h);
 	if (ret != ERROR_SUCCESS || (!value && !def_value))
 		return ret;
 
@@ -759,8 +765,16 @@ int Reg::doDELETE() {
 	ParsedKey	parsed(key);
 	auto 		access = KEY_ALL_ACCESS | get_sam();
 
+	if (!value && !def_value && !all_values)
+		return parsed.delete_key(access);
+
+	HKEY		h;
+	if (auto ret = parsed.open_key(access, &h))
+		return ret;
+
+	RegKey		r(h);
+
 	if (all_values) {
-		RegKey	r		= parsed.get_key(access);
 		auto 	info	= r.info();
 		for (int i = 0; i < info.num_values; i++) {
 			if (auto value = r.value(i, nullptr, 0)) {
@@ -769,18 +783,9 @@ int Reg::doDELETE() {
 			}
 		}
 		return 0;
-
-	} else if (def_value) {
-		RegKey	r		= parsed.get_key(access);
-		return r.remove_value(nullptr);
-
-	} else if (value) {
-		RegKey	r		= parsed.get_key(KEY_ALL_ACCESS);
-		return r.remove_value(value);
-		
-	} else {
-		return RegDeleteKeyEx(parsed.get_rootkey(), parsed.subkey + !!parsed.subkey, get_sam(), 0);
 	}
+
+	return r.remove_value(value);
 }
 
 auto& win_getline(std::wifstream &stream, std::wstring &line) {
@@ -791,10 +796,10 @@ auto& win_getline(std::wifstream &stream, std::wstring &line) {
 }
 
 int Reg::doIMPORT() {
-	 std::wifstream stream(file);
+	std::wifstream stream(file);
 	if (!stream) {
-		std::cerr << "Failed to open file: " << file << std::endl;
-		return ERROR_FILE_NOT_FOUND;
+		out << "Failed to open file: " << file << endl;
+		return errno;
 	}
 
 	stream.imbue(std::locale(std::locale(), new std::codecvt_utf16<wchar_t, 0x10FFFF, std::consume_header>));
@@ -805,27 +810,53 @@ int Reg::doIMPORT() {
 
 	RegKey	key;
 	auto 	access = KEY_ALL_ACCESS | get_sam();
+	bool 	deleted = false;
+	HKEY	h;
 
 	// Parse key values and subkeys
 	while (win_getline(stream, line)) {
 		line = trim(line);
 		if (!line.empty()) {
-			while (line.back() == '\\' && win_getline(stream, line2))
+			while (line.back() == '\\' && win_getline(stream, line2)) {
+				line.pop_back();
 				line += line2;
+			}
 
 			if (line[0] == '[') {
-				key = RegKey(line.substr(1, line.length() - 2).c_str(), access);
-			} else {
+				deleted = line[1] == '-';
+				ParsedKey	parsed(line.substr(1 + deleted, line.length() - 2).c_str());
+
+				if (deleted) {
+					if (auto ret = parsed.delete_key(access))
+						return ret;
+
+				} else {
+					if (auto ret = parsed.open_key(access, &h))
+						return ret;
+					key = RegKey(h);
+				}
+
+			} else if (!deleted) {
 				BYTE	data[1024];
 				auto 	equals	= line.find_first_of('=');
 				if (equals >= 0) {
 					auto	name 	= trim(line.substr(0, equals));
+					auto	value	= trim(line.substr(equals + 1));
+
 					if (name[0] == '"' && name.back() == '"')
 						name = name.substr(1, name.length() - 2);
-					TYPE	type;
-					auto	size	= parse_reg_data(trim(line.substr(equals + 1)), type, data);
-					if (auto r = key.set_value(name.c_str(), type, data, size))
-						return r;
+
+					if (value == L"-") {
+						key.remove_value(name.c_str());
+
+					} else {
+						TYPE	type;
+						auto	size	= parse_reg_data(value, type, data);
+						if (size > 0) {	//ignore bad data
+							if (auto ret = key.set_value(name.c_str(), type, data, size))
+								return ret;
+						}
+					}
 				}
 			}
 		}
@@ -837,10 +868,10 @@ int Reg::doIMPORT() {
 void export_recurse(std::wostream &out, const RegKey &key, std::wstring keyname) {
 	out << '[' << keyname << ']' << endl;
 
-	auto info 		= key.info();
+	auto info 	= key.info();
+	auto data	= (BYTE*)malloc(info.max_data + 1);
 
 	// Enumerate the values
-	auto data		= (BYTE*)malloc(info.max_data + 1);
 	for (int i = 0; i < info.num_values; i++) {
 		if (auto value = key.value(i, data, info.max_data)) {
 			if (value.name.length())
@@ -862,34 +893,32 @@ void export_recurse(std::wostream &out, const RegKey &key, std::wstring keyname)
 		if (name.length())
 			export_recurse(out, RegKey(key.h, name.c_str()), keyname + L'\\' + name);
 	}
-
 }
 
 int Reg::doEXPORT() {
-	 std::wofstream stream(file);
+	 std::wofstream stream(file, std::ios_base::binary|std::ios_base::out);
 	if (!stream) {
-		std::cerr << "Failed to create file: " << file << std::endl;
-		return 1;
+		out << "Failed to create file: " << file << endl;
+		return errno;
 	}
 
-    stream.imbue(std::locale(std::locale(), new std::codecvt_utf8<wchar_t>));
+    stream.imbue(std::locale(std::locale(), new std::codecvt_utf16<wchar_t, 0x10ffff, std::little_endian>));
 
+	stream << L'\xfeff';	//BOM
 	stream << "Windows Registry Editor Version 5.00" << endl << endl;
 
 	ParsedKey	parsed(key);
-	RegKey		key	= parsed.get_key(KEY_READ | get_sam());
-	if (!key)
-		return 1;//"ERROR: The system was unable to find the specified registry key or value.";
+	HKEY h;
+	if (auto ret = parsed.open_key(KEY_READ | get_sam(), &h))
+		return ret;
 
-	export_recurse(stream, key, parsed.get_keyname());
-
+	export_recurse(stream, h, parsed.get_keyname());
 	return 0;
 }
 
 //-----------------------------------------------------------------------------
 //	main
 //-----------------------------------------------------------------------------
-
 
 void print_options(OP op) {
 	out << "REG " << ops[(uint8_t)op];

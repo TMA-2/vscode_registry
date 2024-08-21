@@ -8,6 +8,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 - Release 1
 
+## [0.4.1]
+## Fixed
+- reg bugs
+
 ## [0.4.0]
 ### Added
 - Replacement REG executable

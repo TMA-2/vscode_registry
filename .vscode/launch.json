@@ -23,8 +23,14 @@
 			"type":"cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/reg/reg.exe",
-            "args": ["export", "hkcu\\testkey", "test.reg"],
-            "cwd": "${workspaceFolder}/reg",
+            "args": [
+				"import",
+				"test.reg"
+				//"export",
+				//"HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\CommandStore\\shell\\Windows.rotate270",
+				//"C:\\Users\\adrian\\AppData\\Local\\Temp\\temp2.reg"
+			],
+            "cwd": "${workspaceFolder}",
 			"preLaunchTask": "Build reg.exe"
 		},
 		{
