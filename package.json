@@ -3,7 +3,7 @@
 	"displayName": "Registry Editor",
 	"description": "A Registry Editor for VSCode",
 	"icon": "assets/icon.png",
-	"version": "0.4.3",
+	"version": "0.4.4",
 	"publisher": "isopodlabs",
 	"repository": "https://github.com/adrianstephens/vscode_registry",
 	"engines": {
@@ -68,7 +68,6 @@
 				},
 				"regedit.regExecutable": {
 					"type": "string",
-					"default": "${extensionPath}/reg/reg.exe",
 					"description": "Specifies the path of the a reg.exe.",
 					"when": "config.regedit.useCustomReg"
 				}

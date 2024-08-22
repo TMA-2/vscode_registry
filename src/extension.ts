@@ -462,11 +462,6 @@ function copy(item: TreeItem, strict: boolean) {
 		vscode.env.clipboard.writeText(`[${key.path}]\n"${item.name}"=${registry.data_to_regstring(item.data, strict)}`);
 	}
 }
-function get_settings() {
-	const config = vscode.workspace.getConfiguration('regedit');
-	registry.set_exec(config.get<boolean>('useCustomReg') ? config.get<string>('regExecutable') : undefined);
-}
-
 let selected: TreeItem;
 
 export function activate(context: vscode.ExtensionContext) {
@@ -487,6 +482,14 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 
 	//settings
+	const config = vscode.workspace.getConfiguration('regedit');
+	if (!config.get<string>('regExecutable'))
+		config.update('regExecutable', context.asAbsolutePath("reg\\reg.exe"), vscode.ConfigurationTarget.Global);
+
+	function get_settings() {
+		const config = vscode.workspace.getConfiguration('regedit');
+		registry.set_exec(config.get<boolean>('useCustomReg') ? config.get<string>('regExecutable') : undefined);
+	}
 	get_settings();
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
 		if (event.affectsConfiguration('regedit'))
