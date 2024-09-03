@@ -139,6 +139,11 @@
 				"command": "regedit.viewInReg",
 				"title": "View in Registry",
 				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.find",
+				"title": "Find in Key...",
+				"category": "RegEdit"
 			}
 		],
 		"keybindings": [
@@ -204,14 +209,19 @@
 					"group": "edit"
 				},
 				{
+					"command": "regedit.export",
+					"when": "view == regedit-view && viewItem == 'key'",
+					"group": "edit"
+				},
+				{
 					"command": "regedit.delete",
 					"when": "view == regedit-view",
-					"group": "edit"
+					"group": "modify"
 				},
 				{
 					"command": "regedit.rename",
 					"when": "view == regedit-view && viewItem != 'host'",
-					"group": "edit"
+					"group": "modify"
 				},
 				{
 					"command": "regedit.setValue",
@@ -221,12 +231,12 @@
 				{
 					"command": "regedit.createKey",
 					"when": "view == regedit-view && viewItem == 'key'",
-					"group": "edit"
+					"group": "modify"
 				},
 				{
-					"command": "regedit.export",
+					"command": "regedit.find",
 					"when": "view == regedit-view && viewItem == 'key'",
-					"group": "edit"
+					"group": "find"
 				}
 			],
 			"editor/context": [

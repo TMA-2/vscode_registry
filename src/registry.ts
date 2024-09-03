@@ -8,8 +8,7 @@ const PATH_PATTERN	= /^(HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|H
 //const ITEM_PATTERN  = /^(.*)\s(REG_[A-Z_]+)\s+([^\s].*)$/;
 const ITEM_PATTERN  = /^(.*)\s(REG_[A-Z_]+)\s+\((.*?)\)\s+([^\s].*)$/;
 
-//const reg_exec = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
-let reg_exec = path.resolve(path.dirname(__filename), '..\\reg\\reg.exe');
+let reg_exec = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
 
 const hosts32 : Record<string, KeyImp> = {};
 const hosts64 : Record<string, KeyImp> = {};
@@ -26,6 +25,32 @@ export interface Data {
 	raw:	Uint8Array;
 	value:	any;
 	constructor: {name:string};
+}
+
+interface Values {
+	[key:string]:any;
+	clear: ()=>void;
+	then: (func: (x: Record<string, Data>)=>void)=>unknown;
+}
+
+interface KeyBase {
+	name:		string;
+	parent:		KeyImp;
+	path:		string;
+	exists:		() => Promise<boolean>;
+	destroy:	() => Promise<void>;
+	create:		() => Promise<Key>;
+	deleteValue:(name: string) 				=> Promise<void>;
+	setValue:	(name: string, data: Data)	=> Promise<void>;
+	export:		(file: string) 				=> Promise<void>;
+	toString:	() => string;
+	values: 	Values;
+}
+
+export interface Key extends KeyBase {
+	then:		(func: (key:any)=>Key)=>Key;
+	[key:string|symbol]:any;
+	[Symbol.iterator]: () => any;
 }
 
 function hex_to_bytes(s: string) {
@@ -257,8 +282,11 @@ class Process {
 	stderr: string = '';
 	error?: Error;
 
-	constructor(exec: string, args:string[], reject: (reason?: RegError) => void, close: (proc: Process) => void) {
-		//console.log(`SPAWN: ${exec} ${args.join(' ')}`);
+	static backlog = 0;
+
+	constructor(exec: string, args:string[], reject: (reason?: RegError) => void, accept: (proc: Process) => void) {
+		++Process.backlog;
+		console.log(`SPAWN backlog=${Process.backlog}: ${exec} ${args.join(' ')}`);
 
 		const proc = spawn(exec, args, {
 			cwd: undefined,
@@ -272,6 +300,7 @@ class Process {
 		proc.stderr.on('data', (data : any) => { this.stderr += data.toString(); });
 		proc.on('error', (error: Error) => { this.error = error; });
 		proc.on('close', code => {
+			--Process.backlog;
 			if (this.error) {
 				reject(new RegError(this.error.message));
 			} else if (code) {
@@ -279,7 +308,7 @@ class Process {
 				//console.log(message);
 				reject(new RegError(message, code));
 			} else {
-				close(this);
+				accept(this);
 			}
 		});
 	}
@@ -293,7 +322,51 @@ function argData(value:Data) {
 	const type = value.constructor;
 	return ['/t', `REG_${type.name}`, ...(type == MULTI_SZ ? ['/s', ','] : []), '/d', value.value.toString()];
 }
+/*
+class KeyImpBase {
+	public _keys: 	Record<string, KeyImp> = {};
 
+	private getRootAndPath(): [KeyImp, string] {
+		let key = this.name;
+		let p 	= this.parent;
+		if (!p)
+			return [this, key];
+
+		while (p.parent) {
+			key = p.name + '\\' + key;
+			p 	= p.parent;
+		}
+		if (p.name)
+			key = `\\\\${p.name}\\${key}`;
+		return [p, key];
+	}
+	
+	public getView(root?:KeyImp) {
+		if (!root)
+			root = this.getRootAndPath()[0];
+		return hosts32[root.name] === root ? '32' : '64';
+	}
+	public get path() {
+		return this.getRootAndPath()[1];
+	}
+	public toString() {
+		return this.path;
+	}
+
+	constructor(public name: string, public parent?: KeyImp) {}
+
+	public subkey(key: string) : KeyImp {
+		let p = this as KeyImp;
+		for (const i of key.split('\\')) {
+			if (!p._keys[i])
+				p._keys[i] = new KeyImp(i, p);
+			p = p._keys[i];
+		}
+		return p;
+	}
+
+}
+*/
 class KeyImp {
 	public _items?: Promise<Record<string, Data>>;
 	public _keys: 	Record<string, KeyImp> = {};
@@ -431,13 +504,13 @@ class KeyImp {
 		);
 	}
 
-	//public async setValueString(key: string, type: Type, value: string) : Promise<boolean> {
-	//	return this.setValue(key, type.parse(value));
-	//}
-
 	public async export(file: string) : Promise<boolean> {
 		return this.runCommand('EXPORT', file, '/y').then(() => true, () => false);
 	}
+
+	//public then() {
+	//	return this.read().then(files => new KeyResolved(this, files);
+	//}
 
 	*[Symbol.iterator]() {
 		for (const k in this._keys)
@@ -445,31 +518,95 @@ class KeyImp {
 	}
 }
 
-interface Values {
-	[key:string]:any;
-	clear: ()=>void;
-	then: (func: (x: Record<string, Data>)=>void)=>unknown;
+export function getRawKey(key:string, view?:string) : KeyImp {
+	let host = '';
+	if (key.startsWith('\\\\')) {
+		const i = key.indexOf('\\', 2);
+		host	= key.substring(2, i);
+		key		= key.substring(i + 1);
+	}
+	
+	let i = key.indexOf('\\');
+	if (i === -1)
+		i = key.length;
+
+	let hive_index = HIVES_LONG.indexOf(key.substring(0, i));
+	if (hive_index === -1) {
+		hive_index = HIVES_SHORT.indexOf(key.substring(0, i));
+		if (hive_index === -1)
+			throw new Error('illegal hive specified.');
+		key = `${HIVES_LONG[hive_index]}${key.substring(i)}`;
+	}
+
+	if (host && hive_index >= 2)
+		throw new Error('Remote access other supports HKLM or HKU');
+
+	if (!KEY_PATTERN.test(key ?? ''))
+		throw new Error('illegal key specified.');
+
+	if (view && view != '32' && view != '64')
+		throw new Error('illegal view specified (use 32 or 64)');
+
+	const hosts = view == '32' ? hosts32 : hosts64;
+	let p = hosts[host];
+	if (!p)
+		hosts[host] = p = new KeyImp(host);
+
+	return p.subkey(key);
 }
 
-interface KeyBase {
-	name:		string;
-	parent:		KeyImp;
-	path:		string;
-	exists:		() => Promise<boolean>;
-	destroy:	() => Promise<void>;
-	create:		() => Promise<Key>;
-	deleteValue:(name: string) 				=> Promise<void>;
-	setValue:	(name: string, data: Data)	=> Promise<void>;
-	export:		(file: string) 				=> Promise<void>;
-	toString:	() => string;
-	values: 	Values;
+
+export function reset(view?: string, dirty?: KeyBase[]) {
+	if (dirty) {
+		for (const i of dirty) {
+			const parent = i.parent;
+			delete parent._keys[i.name];
+		}
+	} else {
+		const hosts = view === '32' ? hosts32 : hosts64;
+		for (const i in hosts)
+			delete hosts[i];
+		if (!view) {
+			for (const i in hosts32)
+				delete hosts32[i];
+		}
+	}
 }
 
-export interface Key extends KeyBase {
-	then:		(func: (key:any)=>Key)=>Key;
-	[key:string|symbol]:any;
-	[Symbol.iterator]: () => any;
+
+export async function importReg(file: string, view?: string, dirty?: KeyBase[]) : Promise<boolean> {
+	const args = ['IMPORT', file];
+	if (view)
+		args.push('/reg:' + view);
+
+	return new Promise<Process>((resolve, reject) => new Process(reg_exec, args, reject, resolve)).then(() => {
+		if (dirty) {
+			const parents = new Set<KeyImp>();
+			for (const i of dirty) {
+				const parent = i.parent;
+				parents.add(parent);
+				delete parent._keys[i.name];
+			}
+			Promise.all(Array.from(parents).map(p => p.reread())).then(() => true);
+
+		} else {
+			const hosts = view === '32' ? hosts32 : hosts64;
+			for (const i in hosts)
+				delete hosts[i];
+		}
+		return true;
+	});
 }
+
+export async function set_exec(file?: string) {
+	if (!file)
+		file = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
+	reg_exec = file;
+}
+
+//-----------------------------------------------------------------------------
+// Proxies
+//-----------------------------------------------------------------------------
 
 function MakeValues(p: KeyImp) : Values {
 	return new Proxy(p as unknown as Values, {
@@ -519,92 +656,28 @@ function MakeKey(p: KeyImp): Key {
 	});
 }
 
-export function getRawKey(key:string, view?:string) : KeyImp {
-	let host = '';
-	if (key.startsWith('\\\\')) {
-		const i = key.indexOf('\\', 2);
-		host	= key.substring(2, i);
-		key		= key.substring(i + 1);
-	}
-	
-	let i = key.indexOf('\\');
-	if (i === -1)
-		i = key.length;
-
-	let hive_index = HIVES_LONG.indexOf(key.substring(0, i));
-	if (hive_index === -1) {
-		hive_index = HIVES_SHORT.indexOf(key.substring(0, i));
-		if (hive_index === -1)
-			throw new Error('illegal hive specified.');
-		key = `${HIVES_LONG[hive_index]}${key.substring(i)}`;
-	}
-
-	if (host && hive_index >= 2)
-		throw new Error('For remote access the root key must be HKLM or HKU');
-
-	if (!KEY_PATTERN.test(key ?? ''))
-		throw new Error('illegal key specified.');
-
-	if (view && view != '32' && view != '64')
-		throw new Error('illegal view specified (use 32 or 64)');
-
-	const hosts = view == '32' ? hosts32 : hosts64;
-	let p = hosts[host];
-	if (!p)
-		hosts[host] = p = new KeyImp(host);
-
-	return p.subkey(key);
-}
 
 export function getKey(key:string, view?:string): Key {
 	return MakeKey(getRawKey(key, view));
 }
 
-export function reset(view?: string, dirty?: KeyBase[]) {
-	if (dirty) {
-		for (const i of dirty) {
-			const parent = i.parent;
-			delete parent._keys[i.name];
-		}
-	} else {
-		const hosts = view === '32' ? hosts32 : hosts64;
-		for (const i in hosts)
-			delete hosts[i];
-		if (!view) {
-			for (const i in hosts32)
-				delete hosts32[i];
-		}
-	}
-}
-
-
-export async function importreg(file: string, view?: string, dirty?: KeyBase[]) : Promise<boolean> {
-	const args = ['IMPORT', file];
-	if (view)
-		args.push('/reg:' + view);
-
-	return new Promise<Process>((resolve, reject) => new Process(reg_exec, args, reject, resolve)).then(() => {
-		if (dirty) {
-			const parents = new Set<KeyImp>();
-			for (const i of dirty) {
-				const parent = i.parent;
-				parents.add(parent);
-				delete parent._keys[i.name];
-			}
-			Promise.all(Array.from(parents).map(p => p.reread())).then(() => true);
-
-		} else {
-			const hosts = view === '32' ? hosts32 : hosts64;
-			for (const i in hosts)
-				delete hosts[i];
-		}
-		return true;
+function MakeView(hosts: Record<string, KeyImp>) {
+	return new Proxy({} as Record<string, Key>, {
+		get: (_, host: string) => {
+			let p = hosts[host];
+			if (!p)
+				hosts[host] = p = new KeyImp(host);
+			return MakeKey(p);
+		},
 	});
 }
 
-export async function set_exec(file?: string) {
-	if (!file)
-		file = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
-	reg_exec = file;
-}
+export const view32 = MakeView(hosts32);
+export const view64 = MakeView(hosts64);
+export function host(name: string) { return view64[name]; }
 
+export const HKLM	= host('').HKEY_LOCAL_MACHINE;
+export const HKU	= host('').HKEY_USERS;
+export const HKCU	= host('').HKEY_CURRENT_USER;
+export const HKCR	= host('').HKEY_CLASSES_ROOT;
+export const HKCC	= host('').HKEY_CURRENT_CONFIG;
