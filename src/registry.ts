@@ -1,17 +1,15 @@
 import * as path from "path";
-import {spawn} from 'child_process';
+import {ChildProcess, spawn} from 'child_process';
 
 const HIVES_SHORT 	= ['HKLM', 'HKU', 'HKCU', 'HKCR', 'HKCC'];
 const HIVES_LONG	= ['HKEY_LOCAL_MACHINE', 'HKEY_USERS', 'HKEY_CURRENT_USER', 'HKEY_CLASSES_ROOT', 'HKEY_CURRENT_CONFIG'];
 const KEY_PATTERN   = /(\\[a-zA-Z0-9_\s]+)*/;
 const PATH_PATTERN	= /^(HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|HKEY_USERS|HKEY_CURRENT_CONFIG).*\\(.*)$/;
-//const ITEM_PATTERN  = /^(.*)\s(REG_[A-Z_]+)\s+([^\s].*)$/;
-const ITEM_PATTERN  = /^(.*)\s(REG_[A-Z_]+)\s+\((.*?)\)\s+([^\s].*)$/;
+const ITEM_PATTERN  = /^(.*?)\s+(REG_[A-Z_]+)(\s+\((.*?)\))?\s*(.*)$/;
 
-let reg_exec = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
-
-const hosts32 : Record<string, KeyImp> = {};
-const hosts64 : Record<string, KeyImp> = {};
+let		reg_exec = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
+const	hosts32 : Record<string, KeyPromise> = {};
+const	hosts64 : Record<string, KeyPromise> = {};
 
 export const HIVES			= HIVES_LONG;
 export const REMOTE_HIVES	= HIVES.slice(0, 2);
@@ -27,30 +25,30 @@ export interface Data {
 	constructor: {name:string};
 }
 
-interface Values {
-	[key:string]:any;
-	clear: ()=>void;
-	then: (func: (x: Record<string, Data>)=>void)=>unknown;
-}
-
 interface KeyBase {
 	name:		string;
-	parent:		KeyImp;
+	parent?:	KeyPromise;
 	path:		string;
 	exists:		() => Promise<boolean>;
 	destroy:	() => Promise<void>;
-	create:		() => Promise<Key>;
+	create:		() => Promise<KeyPromise>;
 	deleteValue:(name: string) 				=> Promise<void>;
 	setValue:	(name: string, data: Data)	=> Promise<void>;
 	export:		(file: string) 				=> Promise<void>;
 	toString:	() => string;
-	values: 	Values;
+	[Symbol.iterator]: () => IterableIterator<KeyPromise>;
 }
 
 export interface Key extends KeyBase {
-	then:		(func: (key:any)=>Key)=>Key;
+	values: 	Record<string, any>;
 	[key:string|symbol]:any;
-	[Symbol.iterator]: () => any;
+}
+
+
+export interface SearchResults {
+	update: (x: number)=>void;
+	found:	(x: string)=>void;
+	cancelled: boolean;
 }
 
 function hex_to_bytes(s: string) {
@@ -278,13 +276,14 @@ class RegError {
 }
 
 class Process {
+	proc: ChildProcess;
 	stdout: string = '';
 	stderr: string = '';
 	error?: Error;
 
 	static backlog = 0;
 
-	constructor(exec: string, args:string[], reject: (reason?: RegError) => void, accept: (proc: Process) => void) {
+	constructor(exec: string, args:string[], resolve: (proc: Process) => void, reject: (reason?: RegError) => void, stdout?: (data : any) => void) {
 		++Process.backlog;
 		console.log(`SPAWN backlog=${Process.backlog}: ${exec} ${args.join(' ')}`);
 
@@ -295,8 +294,9 @@ class Process {
 			windowsHide: true,
 			stdio: ['ignore', 'pipe', 'pipe']
 		});
+		this.proc = proc;
 
-		proc.stdout.on('data', (data : any) => { this.stdout += data.toString(); });
+		proc.stdout.on('data', stdout ?? ((data : any) => { this.stdout += data.toString(); }));
 		proc.stderr.on('data', (data : any) => { this.stderr += data.toString(); });
 		proc.on('error', (error: Error) => { this.error = error; });
 		proc.on('close', code => {
@@ -308,7 +308,7 @@ class Process {
 				//console.log(message);
 				reject(new RegError(message, code));
 			} else {
-				accept(this);
+				resolve(this);
 			}
 		});
 	}
@@ -322,11 +322,15 @@ function argData(value:Data) {
 	const type = value.constructor;
 	return ['/t', `REG_${type.name}`, ...(type == MULTI_SZ ? ['/s', ','] : []), '/d', value.value.toString()];
 }
-/*
-class KeyImpBase {
-	public _keys: 	Record<string, KeyImp> = {};
 
-	private getRootAndPath(): [KeyImp, string] {
+export class KeyPromise implements KeyBase {
+	public _items?: Promise<Record<string, Data>>;
+	public _keys: 	Record<string, KeyPromise> = {};
+	public found?:	boolean;
+
+	constructor(public name: string, public parent?: KeyPromise) {}
+
+	private getRootAndPath(): [KeyPromise, string] {
 		let key = this.name;
 		let p 	= this.parent;
 		if (!p)
@@ -341,59 +345,17 @@ class KeyImpBase {
 		return [p, key];
 	}
 	
-	public getView(root?:KeyImp) {
+	public getView(root?:KeyPromise) {
 		if (!root)
 			root = this.getRootAndPath()[0];
 		return hosts32[root.name] === root ? '32' : '64';
 	}
+
 	public get path() {
 		return this.getRootAndPath()[1];
 	}
 	public toString() {
 		return this.path;
-	}
-
-	constructor(public name: string, public parent?: KeyImp) {}
-
-	public subkey(key: string) : KeyImp {
-		let p = this as KeyImp;
-		for (const i of key.split('\\')) {
-			if (!p._keys[i])
-				p._keys[i] = new KeyImp(i, p);
-			p = p._keys[i];
-		}
-		return p;
-	}
-
-}
-*/
-class KeyImp {
-	public _items?: Promise<Record<string, Data>>;
-	public _keys: 	Record<string, KeyImp> = {};
-	public found?:	boolean;
-
-	private getRootAndPath(): [KeyImp, string] {
-		let key = this.name;
-		let p 	= this.parent;
-		if (!p)
-			return [this, key];
-
-		while (p.parent) {
-			key = p.name + '\\' + key;
-			p 	= p.parent;
-		}
-		if (p.name)
-			key = `\\\\${p.name}\\${key}`;
-		return [p, key];
-	}
-	
-	public getView(root?:KeyImp) {
-		if (!root)
-			root = this.getRootAndPath()[0];
-		return hosts32[root.name] === root ? '32' : '64';
-	}
-	public get path() {
-		return this.getRootAndPath()[1];
 	}
 
 	private runCommand(command:string, ...args:string[]) {
@@ -402,13 +364,13 @@ class KeyImp {
 		if (view)
 			args.push('/reg:' + view);
 
-		return new Promise<Process>((resolve, reject) => new Process(reg_exec, [command, fullpath, ...args], reject, resolve));
+		return new Promise<Process>((resolve, reject) => new Process(reg_exec, [command, fullpath, ...args], resolve, reject));
 	}
 
 	private add_found_key(key:string) {
 		if (key && key !== this.name) {
 			if (!(key in this._keys))
-				this._keys[key] = new KeyImp(key, this);
+				this._keys[key] = new KeyPromise(key, this);
 			this._keys[key].found = true;
 		}
 	}
@@ -424,9 +386,9 @@ class KeyImp {
 						const match = ITEM_PATTERN.exec(line);
 						if (match) {
 							//const type = string_to_type(match[2].trim());
-							const itype = +match[3].trim();
+							const itype = +match[4].trim();
 							const type	= number_to_type(itype);
-							items[match[1].trim()] = type.parse(match[4], itype);
+							items[match[1].trim()] = type.parse(match[5], itype);
 							continue;
 						}
 					}
@@ -436,7 +398,7 @@ class KeyImp {
 						this.add_found_key(match[2]);
 				}
 			}
-			for (let p : KeyImp = this; !p.found && p.parent; p = p.parent)
+			for (let p : KeyPromise = this; !p.found && p.parent; p = p.parent)
 				p.found = true;
 			return items;
 		});
@@ -446,17 +408,11 @@ class KeyImp {
 		return this._items ?? this.reread();
 	}
 
-	constructor(public name: string, public parent?: KeyImp) {}
-
-	public toString() {
-		return this.path;
-	}
-
-	public subkey(key: string) : KeyImp {
-		let p: KeyImp = this;
+	public subkey(key: string) : KeyPromise {
+		let p: KeyPromise = this;
 		for (const i of key.split('\\')) {
 			if (!p._keys[i])
-				p._keys[i] = new KeyImp(i, p);
+				p._keys[i] = new KeyPromise(i, p);
 			p = p._keys[i];
 		}
 		return p;
@@ -482,8 +438,9 @@ class KeyImp {
 		);
 	}
 
-	public async create() : Promise<Key> {
-		return this.runCommand('ADD', '/f').then(() => MakeKey(this));//, () => undefined);
+	public async create() {//}: Promise<KeyPromise> {
+		await this.runCommand('ADD', '/f');
+		return this;
 	}
 
 	public async deleteValue(name: string) : Promise<void> {
@@ -504,21 +461,85 @@ class KeyImp {
 		);
 	}
 
-	public async export(file: string) : Promise<boolean> {
-		return this.runCommand('EXPORT', file, '/y').then(() => true, () => false);
+	public async export(file: string) : Promise<void> {
+		return this.runCommand('EXPORT', file, '/y').then(() => void 0);
 	}
 
-	//public then() {
-	//	return this.read().then(files => new KeyResolved(this, files);
-	//}
+	public async search(pattern: string|RegExp, range: number, results: SearchResults) : Promise<void> {
+		if (typeof pattern !== 'string')
+			return;
 
-	*[Symbol.iterator]() {
-		for (const k in this._keys)
-			yield MakeKey(this._keys[k]);
+		const [root, fullpath] = this.getRootAndPath();
+		const args = ['QUERY', fullpath, '/s', '/k', '/v', '/c', '/f', pattern];
+		const view = hosts32[root.name] === root ? '32' : '64';
+		if (view)
+			args.push('/reg:' + view);
+
+		return new Promise<Process>((resolve, reject) => {
+			let stdout	= '';
+			let key		= '';
+			const process = new Process(reg_exec, args, resolve, reject, (data:any) => {
+				stdout += data.toString();
+				const lines = stdout.split('\n');
+				stdout = lines[lines.length - 1];
+				for (const line of lines.slice(0, -1)) {
+					if (line[0] !== ' ') {
+						key = line.trim();
+						if (key.includes(pattern))
+							results.found(key);
+					} else {
+						const match = ITEM_PATTERN.exec(line.trim());
+						if (match)
+							results.found(`${key}@${match[1]}`);
+					}
+				}
+			});
+			return process;
+		}).then(() => undefined);
+	}
+
+	[Symbol.iterator](): IterableIterator<KeyPromise> {
+		return Object.values(this._keys).values();
+	}				
+
+	public then<T, U>(
+		resolve: (value: Key) => T | PromiseLike<T>,
+		reject?: (reason: any) => U | PromiseLike<U>
+	) : PromiseLike<T | U> {
+		return this.read().then(values => resolve(new Proxy(this, {
+			get: (p, key: string | symbol) => {
+				if (key === 'then')
+					return;
+				const v = p[key as keyof KeyPromise];
+				if (v)
+					return typeof v === 'function' ? v.bind(p) : v;
+
+				if (key === Symbol.iterator)
+					return p._keys.values;
+		
+				if (typeof key === 'string') {
+					switch (key) {
+						case 'values':
+							return values;
+						default:
+							return p.subkey(key);
+					}
+				}
+			},
+			has: (p, key: string) => {
+				return key in p._keys;
+			},
+			deleteProperty: (p, key: string) => {
+				p.subkey(key).destroy();
+				return true;
+			},
+		}) as unknown as Key),
+			reject ? reason => reject(reason) : undefined
+		);
 	}
 }
 
-export function getRawKey(key:string, view?:string) : KeyImp {
+export function getKey(key:string, view?:string) : KeyPromise {
 	let host = '';
 	if (key.startsWith('\\\\')) {
 		const i = key.indexOf('\\', 2);
@@ -550,7 +571,7 @@ export function getRawKey(key:string, view?:string) : KeyImp {
 	const hosts = view == '32' ? hosts32 : hosts64;
 	let p = hosts[host];
 	if (!p)
-		hosts[host] = p = new KeyImp(host);
+		hosts[host] = p = new KeyPromise(host);
 
 	return p.subkey(key);
 }
@@ -558,10 +579,8 @@ export function getRawKey(key:string, view?:string) : KeyImp {
 
 export function reset(view?: string, dirty?: KeyBase[]) {
 	if (dirty) {
-		for (const i of dirty) {
-			const parent = i.parent;
-			delete parent._keys[i.name];
-		}
+		for (const i of dirty)
+			delete i.parent?._keys[i.name];
 	} else {
 		const hosts = view === '32' ? hosts32 : hosts64;
 		for (const i in hosts)
@@ -579,11 +598,11 @@ export async function importReg(file: string, view?: string, dirty?: KeyBase[]) 
 	if (view)
 		args.push('/reg:' + view);
 
-	return new Promise<Process>((resolve, reject) => new Process(reg_exec, args, reject, resolve)).then(() => {
+	return new Promise<Process>((resolve, reject) => new Process(reg_exec, args, resolve, reject)).then(() => {
 		if (dirty) {
-			const parents = new Set<KeyImp>();
+			const parents = new Set<KeyPromise>();
 			for (const i of dirty) {
-				const parent = i.parent;
+				const parent = i.parent!;
 				parents.add(parent);
 				delete parent._keys[i.name];
 			}
@@ -598,7 +617,7 @@ export async function importReg(file: string, view?: string, dirty?: KeyBase[]) 
 	});
 }
 
-export async function set_exec(file?: string) {
+export async function setExecutable(file?: string) {
 	if (!file)
 		file = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
 	reg_exec = file;
@@ -608,72 +627,19 @@ export async function set_exec(file?: string) {
 // Proxies
 //-----------------------------------------------------------------------------
 
-function MakeValues(p: KeyImp) : Values {
-	return new Proxy(p as unknown as Values, {
-		get: (obj, key: string) => {
-			if (key == 'then')
-				return p.read().then.bind(p._items);
-			return p.read().then(x => x[key]);
-		},
-		set: (obj, key:string, value) => {
-			p.setValue(key, value);
-			return true;
-		},
-		deleteProperty: (obj, key: string) => {
-			p.deleteValue(key);
-			return true;
-		}
-	});
-}
-
-function MakeKey(p: KeyImp): Key {
-	return new Proxy(p as unknown as Key, {
-		get: (obj, key: string | symbol) => {
-			const v = p[key as keyof KeyImp];
-			if (v)
-				return typeof v === 'function' ? v.bind(p) : v;
-	
-			if (typeof key === 'string') {
-				switch (key) {
-					case 'values':
-						return MakeValues(p);
-					case 'then': {
-						const a = p.read().then(() => p);
-						return a.then.bind(a);
-					}
-					default:
-						return MakeKey(p.subkey(key));
-				}
-			}
-		},
-		has: (obj, key: string) => {
-			return key in p._keys;
-		},
-		deleteProperty: (obj, key: string) => {
-			p.subkey(key).destroy();
-			return true;
-		},
-	});
-}
-
-
-export function getKey(key:string, view?:string): Key {
-	return MakeKey(getRawKey(key, view));
-}
-
-function MakeView(hosts: Record<string, KeyImp>) {
+function makeView(hosts: Record<string, KeyPromise>) {
 	return new Proxy({} as Record<string, Key>, {
 		get: (_, host: string) => {
 			let p = hosts[host];
 			if (!p)
-				hosts[host] = p = new KeyImp(host);
-			return MakeKey(p);
+				hosts[host] = p = new KeyPromise(host);
+			return p;
 		},
 	});
 }
 
-export const view32 = MakeView(hosts32);
-export const view64 = MakeView(hosts64);
+export const view32 = makeView(hosts32);
+export const view64 = makeView(hosts64);
 export function host(name: string) { return view64[name]; }
 
 export const HKLM	= host('').HKEY_LOCAL_MACHINE;

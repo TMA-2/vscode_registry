@@ -144,6 +144,18 @@
 				"command": "regedit.find",
 				"title": "Find in Key...",
 				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.findNext",
+				"title": "Next found",
+				"icon": "$(arrow-down)",
+				"category": "RegEdit"
+			},
+			{
+				"command": "regedit.findPrev",
+				"title": "Previous found",
+				"icon": "$(arrow-up)",
+				"category": "RegEdit"
 			}
 		],
 		"keybindings": [
@@ -198,6 +210,11 @@
 			],
 			"view/item/context": [
 				{
+					"command": "regedit.delete",
+					"when": "view == regedit-view",
+					"group": "modify"
+				},
+				{
 					"command": "regedit.edit",
 					"when": "view == regedit-view && viewItem != 'host'",
 					"group": "edit"
@@ -210,13 +227,8 @@
 				},
 				{
 					"command": "regedit.export",
-					"when": "view == regedit-view && viewItem == 'key'",
+					"when": "view == regedit-view && (viewItem == 'key' || viewItem == 'keyWithSearch')",
 					"group": "edit"
-				},
-				{
-					"command": "regedit.delete",
-					"when": "view == regedit-view",
-					"group": "modify"
 				},
 				{
 					"command": "regedit.rename",
@@ -225,19 +237,30 @@
 				},
 				{
 					"command": "regedit.setValue",
-					"when": "view == regedit-view && viewItem == 'key'",
+					"when": "view == regedit-view && (viewItem == 'key' || viewItem == 'keyWithSearch')",
 					"group": "modify"
 				},
 				{
 					"command": "regedit.createKey",
-					"when": "view == regedit-view && viewItem == 'key'",
+					"when": "view == regedit-view && (viewItem == 'key' || viewItem == 'keyWithSearch')",
 					"group": "modify"
 				},
 				{
 					"command": "regedit.find",
-					"when": "view == regedit-view && viewItem == 'key'",
+					"when": "view == regedit-view && (viewItem == 'key' || viewItem == 'keyWithSearch')",
 					"group": "find"
+				},
+				{
+					"command": "regedit.findNext",
+					"when": "view == regedit-view && viewItem == 'keyWithSearch'",
+					"group": "inline"
+				},
+				{
+					"command": "regedit.findPrev",
+					"when": "view == regedit-view && viewItem == 'keyWithSearch'",
+					"group": "inline"
 				}
+
 			],
 			"editor/context": [
 				{
