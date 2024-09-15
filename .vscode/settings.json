@@ -64,6 +64,16 @@
         "clocale": "cpp",
         "concepts": "cpp",
         "iterator": "cpp",
-        "optional": "cpp"
+        "optional": "cpp",
+        "array": "cpp",
+        "chrono": "cpp",
+        "coroutine": "cpp",
+        "forward_list": "cpp",
+        "list": "cpp",
+        "unordered_map": "cpp",
+        "ratio": "cpp",
+        "stop_token": "cpp",
+        "thread": "cpp",
+        "xhash": "cpp"
     }
 }

@@ -252,15 +252,14 @@
 				},
 				{
 					"command": "regedit.findNext",
-					"when": "view == regedit-view && viewItem == 'keyWithSearch'",
+					"when": "view == regedit-view && viewItem == 'keyWithSearch' && regedit.update != 0",
 					"group": "inline"
 				},
 				{
 					"command": "regedit.findPrev",
-					"when": "view == regedit-view && viewItem == 'keyWithSearch'",
+					"when": "view == regedit-view && viewItem == 'keyWithSearch' && regedit.update != 0",
 					"group": "inline"
 				}
-
 			],
 			"editor/context": [
 				{
@@ -278,7 +277,7 @@
 		"publish": "vsce publish patch"
 	},
 	"devDependencies": {
-		"@types/node": "^18",
+		"@types/node": "^18.19.50",
 		"@types/vscode": "^1.73.0",
 		"@typescript-eslint/eslint-plugin": "^7.14.0",
 		"@typescript-eslint/parser": "^7.14.0",

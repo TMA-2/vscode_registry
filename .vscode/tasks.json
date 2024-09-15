@@ -31,11 +31,22 @@
                 "reg\\reg.cpp",
                 "-DUNICODE", "-D_UNICODE", "-DWIN32_LEAN_AND_MEAN",
                 "-o", "reg\\reg.exe",
+                "/MTd",
                 "/link", "advapi32.lib"
             ],
-            "problemMatcher": [
-                "$gcc"
-            ],
+            "problemMatcher": {
+                "owner": "cpp",
+				"fileLocation": [
+					"relative", "${workspaceFolder}"
+				],
+                "pattern": {
+                    "regexp": "(.*)\\((.*)\\) *: *(warning|error) *: *(.*)",
+                    "file": 1,
+                    "location": 2,
+                    "severity": 3,
+                    "message": 4
+                }
+            },
             "group": {
                 "kind": "build",
                 "isDefault": true

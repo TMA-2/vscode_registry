@@ -8,8 +8,8 @@ const PATH_PATTERN	= /^(HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|H
 const ITEM_PATTERN  = /^(.*?)\s+(REG_[A-Z_]+)(\s+\((.*?)\))?\s*(.*)$/;
 
 let		reg_exec = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
-const	hosts32 : Record<string, KeyPromise> = {};
-const	hosts64 : Record<string, KeyPromise> = {};
+const	hosts32 : Record<string, KeyHost> = {};
+const	hosts64 : Record<string, KeyHost> = {};
 
 export const HIVES			= HIVES_LONG;
 export const REMOTE_HIVES	= HIVES.slice(0, 2);
@@ -49,6 +49,14 @@ export interface SearchResults {
 	update: (x: number)=>void;
 	found:	(x: string)=>void;
 	cancelled: boolean;
+}
+
+export interface SearchOptions {
+	recursive: boolean;			//default: true
+	case_sensitive: boolean;	//default: false
+	keys: 	boolean;			//default: true
+	values: boolean;			//default: true
+	data: 	boolean;			//default: true
 }
 
 function hex_to_bytes(s: string) {
@@ -270,9 +278,45 @@ export function regstring_to_data(value: string) : Data|undefined {
 	}
 }
 
-class RegError {
-	constructor(public message: string, public code: number = -1) {}
-	toString() { return this.message; }
+export function output_to_data(line: string) : [string, Data]|undefined {
+	const match = ITEM_PATTERN.exec(line);
+	if (match) {
+		if (match[4]) {
+			const itype = +match[4].trim();
+			const type	= number_to_type(itype);
+			return [match[1].trim(), type.parse(match[5], itype)];
+		} else {
+			const type = string_to_type(match[2].trim());
+			if (type)
+				return [match[1].trim(), type.parse(match[5])];
+		}
+	}
+}
+
+export class CancellablePromise<T> extends Promise<T> {
+    private reject: (reason?: any) => void;
+    private abort: () => void;
+
+    constructor(executor: (
+		resolve: (value: T | PromiseLike<T>) => void,
+		reject: (reason?: any) => void
+	) => () => void) {
+		let _reject: (reason?: any) => void;
+		let _abort: () => void;
+
+		super((resolve, reject) => {
+			_reject = reject;
+			_abort = executor(resolve, reject);
+		});
+
+		this.reject = _reject!;
+		this.abort	= _abort!;
+	}
+
+	cancel(reason?: any) {
+		this.abort();
+		this.reject(reason);
+	}
 }
 
 class Process {
@@ -281,32 +325,39 @@ class Process {
 	stderr: string = '';
 	error?: Error;
 
-	static backlog = 0;
-
-	constructor(exec: string, args:string[], resolve: (proc: Process) => void, reject: (reason?: RegError) => void, stdout?: (data : any) => void) {
-		++Process.backlog;
-		console.log(`SPAWN backlog=${Process.backlog}: ${exec} ${args.join(' ')}`);
-
+	constructor(exec: string, args:string[], resolve: (proc: Process) => void, reject: (reason?: Error) => void, onlines?: (line : string) => void) {
 		const proc = spawn(exec, args, {
 			cwd: undefined,
 			env: process.env,
 			shell: false,
-			windowsHide: true,
+			//windowsHide: true,
 			stdio: ['ignore', 'pipe', 'pipe']
 		});
 		this.proc = proc;
 
-		proc.stdout.on('data', stdout ?? ((data : any) => { this.stdout += data.toString(); }));
+		proc.stdout.on('data', (data : any) => {
+			this.stdout += data.toString();
+			if (onlines) {
+				const lines = this.stdout.split('\n');
+				if (lines.length) {
+					this.stdout = lines.pop()!;
+					for (const i of lines)
+						onlines(i.endsWith('\r') ? i.slice(0, -1) : i);
+				}
+			}
+		});
 		proc.stderr.on('data', (data : any) => { this.stderr += data.toString(); });
+
 		proc.on('error', (error: Error) => { this.error = error; });
+
 		proc.on('close', code => {
-			--Process.backlog;
+			if (onlines && this.stdout)
+				onlines(this.stdout);
 			if (this.error) {
-				reject(new RegError(this.error.message));
+				reject(new Error(this.error.message));
 			} else if (code) {
 				const message =`${exec} ${args.join(' ')} command exited with code ${code}:\n${this.stdout.trim()}\n${this.stderr.trim()}`;
-				//console.log(message);
-				reject(new RegError(message, code));
+				reject(new Error(message, {cause:code}));
 			} else {
 				resolve(this);
 			}
@@ -345,7 +396,7 @@ export class KeyPromise implements KeyBase {
 		return [p, key];
 	}
 	
-	public getView(root?:KeyPromise) {
+	public getView(root?:KeyPromise) : string|undefined {
 		if (!root)
 			root = this.getRootAndPath()[0];
 		return hosts32[root.name] === root ? '32' : '64';
@@ -465,37 +516,47 @@ export class KeyPromise implements KeyBase {
 		return this.runCommand('EXPORT', file, '/y').then(() => void 0);
 	}
 
-	public async search(pattern: string|RegExp, range: number, results: SearchResults) : Promise<void> {
-		if (typeof pattern !== 'string')
-			return;
-
+	public search(pattern: string, results: SearchResults, options?: SearchOptions) : CancellablePromise<Process> {
 		const [root, fullpath] = this.getRootAndPath();
-		const args = ['QUERY', fullpath, '/s', '/k', '/v', '/c', '/f', pattern];
+		const args = ['QUERY', fullpath, '/f', pattern];
+
+		if (options?.recursive ?? true)
+			args.push('/s');
+		if (options?.case_sensitive)
+			args.push('/c');
+
+		if (options && (options.keys ?? options.values ?? options.data !== undefined)) {
+			if (options.keys)
+				args.push('/k');
+			if (options.values)
+				args.push('/v');
+			if (options.data)
+				args.push('/d');
+		}
+
 		const view = hosts32[root.name] === root ? '32' : '64';
 		if (view)
 			args.push('/reg:' + view);
 
-		return new Promise<Process>((resolve, reject) => {
-			let stdout	= '';
-			let key		= '';
-			const process = new Process(reg_exec, args, resolve, reject, (data:any) => {
-				stdout += data.toString();
-				const lines = stdout.split('\n');
-				stdout = lines[lines.length - 1];
-				for (const line of lines.slice(0, -1)) {
-					if (line[0] !== ' ') {
-						key = line.trim();
-						if (key.includes(pattern))
-							results.found(key);
-					} else {
-						const match = ITEM_PATTERN.exec(line.trim());
-						if (match)
-							results.found(`${key}@${match[1]}`);
-					}
-				}
+		return new CancellablePromise<Process>((resolve, reject) => {
+			//let key		= '';
+			const process = new Process(reg_exec, args, resolve, reject, (line: string) => {
+				results.found(line);
+				/*
+				if (line[0] !== ' ' && line[0] != '\t') {
+					key = line.trim();
+					if (key.includes(pattern))
+						results.found(key);
+				} else {
+					const match = ITEM_PATTERN.exec(line.trim());
+					if (match)
+						results.found(`${key}@${match[1]}`);
+				}*/
 			});
-			return process;
-		}).then(() => undefined);
+			return () => {
+				process.proc.kill();
+			};
+		});
 	}
 
 	[Symbol.iterator](): IterableIterator<KeyPromise> {
@@ -571,7 +632,7 @@ export function getKey(key:string, view?:string) : KeyPromise {
 	const hosts = view == '32' ? hosts32 : hosts64;
 	let p = hosts[host];
 	if (!p)
-		hosts[host] = p = new KeyPromise(host);
+		hosts[host] = p = new KeyHost(host);
 
 	return p.subkey(key);
 }
@@ -624,26 +685,51 @@ export async function setExecutable(file?: string) {
 }
 
 //-----------------------------------------------------------------------------
-// Proxies
+// views/hosts
 //-----------------------------------------------------------------------------
 
-function makeView(hosts: Record<string, KeyPromise>) {
-	return new Proxy({} as Record<string, Key>, {
-		get: (_, host: string) => {
-			let p = hosts[host];
-			if (!p)
-				hosts[host] = p = new KeyPromise(host);
-			return p;
-		},
-	});
+export class KeyHost extends KeyPromise {
+	get HKEY_LOCAL_MACHINE()	{ return this.subkey('HKEY_LOCAL_MACHINE'); }
+	get HKEY_USERS()			{ return this.subkey('HKEY_USERS'); }
+	get HKEY_CURRENT_USER()		{ return this.subkey('HKEY_CURRENT_USER'); }
+	get HKEY_CLASSES_ROOT()		{ return this.subkey('HKEY_CLASSES_ROOT'); }
+	get HKEY_CURRENT_CONFIG()	{ return this.subkey('HKEY_CURRENT_CONFIG'); }
 }
 
-export const view32 = makeView(hosts32);
-export const view64 = makeView(hosts64);
-export function host(name: string) { return view64[name]; }
+export class View {
+	constructor(private hosts: Record<string, KeyHost>) {}
+	host(host:string) {
+		let p = this.hosts[host];
+		if (!p)
+			this.hosts[host] = p = new KeyHost(host);
+		return p;
+	}
+	get HKEY_LOCAL_MACHINE()	{ return this.host('').HKEY_LOCAL_MACHINE; }
+	get HKEY_USERS()			{ return this.host('').HKEY_USERS; }
+	get HKEY_CURRENT_USER()		{ return this.host('').HKEY_CURRENT_USER; }
+	get HKEY_CLASSES_ROOT()		{ return this.host('').HKEY_CLASSES_ROOT; }
+	get HKEY_CURRENT_CONFIG()	{ return this.host('').HKEY_CURRENT_CONFIG; }
+	get HKLM()					{ return this.HKEY_LOCAL_MACHINE; }
+	get HKU()					{ return this.HKEY_USERS; }
+	get HKCU()					{ return this.HKEY_CURRENT_USER; }
+	get HKCR()					{ return this.HKEY_CLASSES_ROOT; }
+	get HKCC()					{ return this.HKEY_CURRENT_CONFIG; }
+}
 
-export const HKLM	= host('').HKEY_LOCAL_MACHINE;
-export const HKU	= host('').HKEY_USERS;
-export const HKCU	= host('').HKEY_CURRENT_USER;
-export const HKCR	= host('').HKEY_CLASSES_ROOT;
-export const HKCC	= host('').HKEY_CURRENT_CONFIG;
+export const view32 		= new View(hosts32);
+export const view64 		= new View(hosts64);
+export const view_default	= view64;
+
+export function host(name: string) { return view_default.host(name); }
+
+export const HKEY_LOCAL_MACHINE 	= host('').HKEY_LOCAL_MACHINE;
+export const HKEY_USERS    	 		= host('').HKEY_USERS;
+export const HKEY_CURRENT_USER  	= host('').HKEY_CURRENT_USER;
+export const HKEY_CLASSES_ROOT  	= host('').HKEY_CLASSES_ROOT;
+export const HKEY_CURRENT_CONFIG	= host('').HKEY_CURRENT_CONFIG;
+export const HKLM					= HKEY_LOCAL_MACHINE;
+export const HKU					= HKEY_USERS;
+export const HKCU					= HKEY_CURRENT_USER;
+export const HKCR					= HKEY_CLASSES_ROOT;
+export const HKCC					= HKEY_CURRENT_CONFIG;
+

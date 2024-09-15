@@ -24,14 +24,18 @@
             "request": "launch",
             "program": "${workspaceFolder}/reg/reg.exe",
             "args": [
-				"import",
-				"test.reg"
-				//"export",
-				//"HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\CommandStore\\shell\\Windows.rotate270",
-				//"C:\\Users\\adrian\\AppData\\Local\\Temp\\temp2.reg"
+				"load", "HKLM\\VS3", "C:\\Users\\adrian\\AppData\\Local\\Microsoft\\VisualStudio\\17.0_f78093fe\\privateregistry.bin"
+				//"query",
+				//"HKEY_LOCAL_MACHINE", "/f", "abc", "/s", "/reg:64"
+				//"/z", "/reg:64"
 			],
             "cwd": "${workspaceFolder}",
-			"preLaunchTask": "Build reg.exe"
+			"sourceFileMap": {
+				"minkernel/crts/ucrt/src/appcrt":	"C:/Program Files (x86)/Windows Kits/10/Source/10.0.22621.0/ucrt",
+				"minkernel/crts":					"C:/Program Files (x86)/Windows Kits/10/Source/10.0.22621.0",
+				"VCCRT/vcruntime/inc": 				"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.40.33807/crt/src/vcruntime",
+			},
+			"preLaunchTask": "Build reg.exe",
 		},
 		{
             "name": "Attach Debugger",

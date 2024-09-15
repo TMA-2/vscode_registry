@@ -1,45 +1,159 @@
+#include "base.h"
+#include "text.h"
+#include "string.h"
+
 #include <windows.h>
-#include <string>
-#include <iostream>
-#include <iomanip>
-#include <fstream>
-#include <codecvt>
 #include <io.h>
 #include <fcntl.h>
-#include <cctype>
+#include <stdio.h>
+#include <string.h>
 
-using std::endl;
-static auto& out = std::wcout;
+//static auto& out = std::wcout;
+
+struct WinFile {
+	HANDLE	h;
+	WinFile(HANDLE h) : h(h) {}
+	~WinFile() { CloseHandle(h); }
+	explicit operator bool() const { return h != INVALID_HANDLE_VALUE; }
+};
+
+struct WinFileWriter : WinFile {
+	WinFileWriter(const wchar_t *filename) : WinFile(CreateFile(filename, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)) {}
+	~WinFileWriter() {
+		FlushFileBuffers(h);
+	}
+	size_t writebuff(const void *p, size_t n) {
+		DWORD	written;
+		WriteFile(h, p, n, &written, NULL);
+		return written;
+	}
+};
+
+struct WinFileReader : WinFile {
+	WinFileReader(const wchar_t *filename) : WinFile(CreateFile(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)) {}
+	int readbuff(void *p, size_t n) {
+		DWORD	read;
+		if (!ReadFile(h, p, n, &read, NULL))
+			return -1;
+		return read;
+	}
+};
+
+struct FileWriter : TextWriter<wchar_t> {
+	FILE	*h;
+	int		column;
+
+	FileWriter(FILE *h) : h(h) {}
+	FileWriter(const wchar_t *filename) {
+		_wfopen_s(&h, filename, L"w, ccs=UTF-8");
+	}
+	~FileWriter() { fflush(h); fclose(h); }
+	operator FILE*() const { return h; }
+
+	size_t write(const wchar_t* buffer, size_t size) {
+		auto n = fwrite(buffer, sizeof(wchar_t), size, h);
+		column += n;
+		return n;
+	}
+	void flush() { fflush(h); column = 0;}
+};
+
+struct FileReader {
+	FILE	*h;
+	FileReader(FILE *h) : h(h) {}
+	FileReader(const wchar_t *filename) {
+		if (_wfopen_s(&h, filename, L"rb") == 0) {
+			auto b0 = getc(h);
+			if (b0 == 0xef) {
+				if (getc(h) == 0xbb && getc(h) == 0xbf) {
+					_setmode(_fileno(h), _O_U8TEXT);//8
+					return;
+				}
+			} else if (b0 == 0xff) {
+				if (getc(h) == 0xfe) {
+					_setmode(_fileno(h), _O_U16TEXT);//16le
+					return;
+				}
+			} else if (b0 == 0xfe) {
+				if (getc(h) == 0xff) {
+					_setmode(_fileno(h), _O_U16TEXT);//16be
+					return;
+				}
+			}
+			fseek(h, 0, SEEK_SET);
+		}
+	}
+	~FileReader() { fclose(h); }
+	operator FILE*() const { return h; }
+
+	int readbuff(void* buffer, size_t size) {
+		return fread(buffer, 1, size, h);
+	}
+	template<typename T> bool get(T &t) {
+		return readbuff(&t, sizeof(T)) == sizeof(T);
+	}
+};
+
+FileWriter	out(stdout);
+
+//-----------------------------------------------------------------------------
+// base
+//-----------------------------------------------------------------------------
+
+template<typename T, int B, int N, char TEN> struct _base {
+	T t;
+	constexpr _base(T t = 0) : t(t) {}
+	constexpr operator T() const { return t; }
+	template<typename C> friend void put(TextWriter<C>& p, const _base& h) {
+		C temp[N];
+		p.write(put_digits<B>(h.t, end(temp), TEN, N), N);
+	}
+};
+
+template<typename T, int B, char TEN> struct _base<T, B, -1, TEN> {
+	T t;
+	constexpr _base(T t = 0) : t(t) {}
+	constexpr operator T() const { return t; }
+	template<typename C> friend void put(TextWriter<C>& w, const _base& h) {
+		C temp[sizeof(T) * 8];	// max digits if binary
+		auto p = put_digits<B>(h.t, end(temp), TEN);
+		w.write(p, end(temp) - p);
+	}
+};
+
+template<int B, int N = -1, char TEN = 'a', typename T> auto base(T t) {
+	return _base<T, B, N, TEN>(t);
+}
 
 
 //-----------------------------------------------------------------------------
 //	helpers
 //-----------------------------------------------------------------------------
 
-template<typename T, int N> auto num_elements(T (&)[N]) { return N; }
+bool wildcard_check(const wchar_t* line, const wchar_t* pattern, bool anchored = false) {
+	const wchar_t* placeholder = anchored ? nullptr : pattern;
 
-auto trim(const std::wstring &s) {
-	int	a = 0, b = s.length();
-	while (isspace(s[a]))
-		a++;
-	while (b > a && isspace(s[b - 1]))
-		--b;
-	return s.substr(a, b);
+	while (*line && *pattern) {
+		auto c = *pattern++;
+		if (c == '?' || c == *line)
+			line++;
+		else if (c == '*')
+			placeholder = pattern;
+		else if (--pattern == placeholder)
+			line++;
+		else if (placeholder)
+			pattern = placeholder;
+		else
+			return false;
+	}
+
+	return !*pattern && (!anchored || !*line);
 }
 
-auto startsWith(const std::wstring &a, const wchar_t *b) {
-	auto n = wcslen(b);
-	return wcsncmp(&a[0], b, n) == 0;
-}
-
-auto endsWith(const std::wstring &a, const wchar_t *b) {
-	auto n = wcslen(b);
-	return wcsncmp(&*a.end() - n, b, n) == 0;
-}
-
-auto unescape(const wchar_t *s, wchar_t *dest, char separator = 0) {
+auto unescape(string::view v, wchar_t *dest, wchar_t separator = 0) {
 	auto p = dest;
-	while (auto c = *s++) {
+	for (auto s = v.begin(), e = v.end(); s < e;) {
+		auto c = *s++;
 		if (c == '\\' && s[0]) {
 			switch (c = *s++) {
 				case '\\': break;
@@ -59,10 +173,10 @@ auto unescape(const wchar_t *s, wchar_t *dest, char separator = 0) {
 	return p - dest;
 }
 
-auto escape(const wchar_t *s, size_t size, wchar_t *dest, char separator = 0) {
+auto escape(string::view v, wchar_t *dest, wchar_t separator = 0) {
 	auto p = dest;
-	for (auto e = s + size; s < e; s++) {
-		auto c = *s;
+	for (auto s = v.begin(), e = v.end(); s < e;) {
+		auto c = *s++;
 		switch (c) {
 			case '\\': *p++ = '\\'; break;
 			case '"':  *p++ = '\\'; break;
@@ -82,8 +196,9 @@ auto escape(const wchar_t *s, size_t size, wchar_t *dest, char separator = 0) {
 	*p = 0;
 	return p - dest;
 }
-
+/*
 const char *hex = "0123456789abcdef";
+*/
 
 auto hexchar(wchar_t c) {
 	return c >= '0' && c <= '9' ? c - '0'
@@ -91,7 +206,6 @@ auto hexchar(wchar_t c) {
 		: c >= 'a' && c <= 'f' ? c - 'a' + 10
 		: -1;
 }
-
 //-----------------------------------------------------------------------------
 //	registry stuff
 //-----------------------------------------------------------------------------
@@ -104,8 +218,11 @@ enum class OP : uint8_t {
 	ADD,
 	DEL,
 	EXPORT,
-	IMPORT
-	/*, COPY, SAVE, RESTORE, LOAD, UNLOAD, COMPARE, FLAGS*/,
+	IMPORT,
+	/* COPY, SAVE, RESTORE,*/
+	LOAD,
+	UNLOAD,
+	/* COMPARE, FLAGS*/
 	NUM
 };
 static const wchar_t* ops[] = {
@@ -117,8 +234,8 @@ static const wchar_t* ops[] = {
 //	L"COPY",
 //	L"SAVE",
 //	L"RESTORE",
-//	L"LOAD",
-//	L"UNLOAD",
+	L"LOAD",
+	L"UNLOAD",
 //	L"COMPARE",
 //	L"FLAGS"
 };
@@ -188,13 +305,7 @@ const wchar_t *hives[][2] = {
 	L"HKEY_CURRENT_CONFIG",		L"HKCC",
 };
 
-auto toupper(std::wstring &&str) {
-    for (auto &i : str)
-        i = toupper(i);
-	return str;
-}
-
-HIVE get_hive(const std::wstring &hive) {
+HIVE get_hive(const string &hive) {
 	for (auto &i : hives) {
 		if (hive == i[0] || hive == i[1])
 			return (HIVE)(&i - hives);
@@ -309,6 +420,19 @@ static const OPOptions op_options[] = {
 	opt_reg64,
 	opt_end
 }},
+//LOAD
+{(Option[]){
+	opt_key,
+	{OPT::file,			nullptr, 	L"FileName",	L"The name of the hive file to load. You must use REG SAVE to create this file."},
+	opt_reg32,
+	opt_reg64,
+	opt_end
+}},
+//UNLOAD
+{(Option[]){
+	opt_key,
+	opt_end
+}},
 };
 
 wchar_t *get_options(Option *opts, int argc, wchar_t *argv[], wchar_t **string_args, uint32_t &bool_args) {
@@ -326,9 +450,9 @@ wchar_t *get_options(Option *opts, int argc, wchar_t *argv[], wchar_t **string_a
 			bool found = false;
 			for (auto o = opts; o->desc; ++o) {
 				if (wcscmp(a + 1, o->sw) == 0) {
-					if (o->arg)
-						string_args[(int)o->opt] = *argv++;
-					else
+					if (o->arg) {
+						string_args[(int)o->opt] = (*argv)[0] == '/' ? (wchar_t*)L"" : *argv++;
+					} else
 						bool_args |= 1 << (int)o->opt;
 					found = true;
 					break;
@@ -341,35 +465,49 @@ wchar_t *get_options(Option *opts, int argc, wchar_t *argv[], wchar_t **string_a
 	return nullptr;
 }
 
-void write_command_data(BYTE *data, DWORD size, TYPE type, char separator) {
+void write_command_data(TextWriter<wchar_t> &out, BYTE *data, DWORD size, TYPE type, wchar_t *sep) {
 	switch (type) {
 		case TYPE::SZ:
-		case TYPE::EXPAND_SZ:
+		case TYPE::EXPAND_SZ: {
+			auto text = string::view((const wchar_t*)data, size / 2);
+			if (text.back() == 0)
+				text.pop_back();
+			out << text;
+			break;
+		}
+
 		case TYPE::MULTI_SZ: {
-			auto p = (wchar_t*)malloc(size * 2);
-			escape((const wchar_t*)data, size / 2 - (type == TYPE::MULTI_SZ ? 2 : 1), (wchar_t*)p, separator);
-			out << p << endl; 
-			free(p);
+			auto text = string::view((const wchar_t*)data, size / 2);
+			if (text.back() == 0)
+				text.pop_back();
+			while (!text.empty()) {
+				auto p = text.find(L'\0');
+				out << string::view(text.begin(), p);
+				if (p < text.end())
+					++p;
+				if (p < text.end())
+					out << sep;
+				text = string::view(p, text.end());
+			}
 			break;
 		}
 		case TYPE::DWORD:
-			out << "0x" << std::hex << *(DWORD*)data << std::dec << endl;
+			out << L"0x" << base<16>(*(DWORD*)data);
 			break;
 
 		case TYPE::DWORD_BIG_ENDIAN:
-			out << "0x" << std::hex << _byteswap_ulong(*(DWORD*)data) << std::dec << endl;
+			out << L"0x" << base<16>(_byteswap_ulong(*(DWORD*)data));
 			break;
 
 		case TYPE::QWORD:
-			out << "0x" << std::hex << *(uint64_t*)data << std::dec << endl;
+			out << L"0x" << base<16>(*(uint64_t*)data);
 			break;
 
 		default:
 			for (int i = 0; i < size; i++) {
 				auto b = data[i];
-				out << hex[b >> 4] << hex[b & 15];
+				out << base<16,2,'A'>(b);
 			}
-			out << endl;
 			break;
 	}
 }
@@ -406,17 +544,18 @@ size_t parse_command_data(wchar_t *data, TYPE type, char separator) {
 	}
 }
 
-void write_reg_data(std::wostream &out, BYTE *data, DWORD size, TYPE type) {
+void write_reg_data(FileWriter &out, BYTE *data, DWORD size, TYPE type) {
 	switch (type) {
 		case TYPE::SZ: {
 			auto p = (wchar_t*)malloc(size * 2);
-			escape((const wchar_t*)data, size / 2 - 1, p);
-			out << '"' << p << '"' << endl; 
+			escape(string::view((const wchar_t*)data, size / 2 - 1), p);
+			out << L'"' << p << L'"' << endl; 
 			free(p);
 			break;
 		}
 		case TYPE::DWORD:
-			out << "dword:" << std::setfill(L'0') << std::setw(8) << std::hex << *(DWORD*)data << std::dec << endl;
+//			out << "dword:" << std::setfill(L'0') << std::setw(8) << std::hex << *(DWORD*)data << std::dec << endl;
+			out << L"dword:" << base<16, 8>(*(DWORD*)data) << endl;
 			break;
 
 		//case TYPE::QWORD:
@@ -425,40 +564,44 @@ void write_reg_data(std::wostream &out, BYTE *data, DWORD size, TYPE type) {
 
 		default:
 			if (type == TYPE::BINARY)
-				out << "hex:";
+				out << L"hex:";
 			else
-				out << "hex(" << std::hex << (int)type << std::dec << "):";
+				out << L"hex(" << base<16>((int)type) << L"):";
 
 			for (int i = 0; i < size; i++) {
 				auto b = data[i];
-				out << hex[b >> 4] << hex[b & 15];
-				if (i != size - 1)
-					out << ',';
+				out << base<16,2>(b);
+				if (i != size - 1) {
+					out << L',';
+					if (out.column > 76)
+						out << L'\\' << endl << L"  ";
+				}
 			}
 			out << endl;
 			break;
 	}
 }
 
-size_t parse_reg_data(const std::wstring &line, TYPE &type, BYTE *data) {
+dynamic_range<byte> parse_reg_data(const string &line, TYPE &type) {
+	dynamic_range<byte>	data;
+
 	if (line[0] == '"') {
-		auto end = line.find_last_of('"');
-		if (end >= 0) {
+		auto end = line.find_last('"');
+		if (end) {
 			type = TYPE::SZ;
-			return unescape(line.substr(1, end - 1).c_str(), (wchar_t*)data) * 2 + 2;
+			auto size = unescape(string::view(line.begin() + 1, end), (wchar_t*)data.ensure((end - line) * 2)) * 2 + 2;
+			data.alloc(size);
 		}
 
-	} else if (startsWith(line, L"dword:")) {
+	} else if (line.startsWith(L"dword:")) {
 		type = TYPE::DWORD;
-		*((DWORD*)data) = wcstoul(&line[6], nullptr, 16);
-		return 4;
+		*((DWORD*)data.alloc(sizeof(DWORD))) = wcstoul(&line[6], nullptr, 16);
 
-	} else if (startsWith(line, L"qword:")) {
+	} else if (line.startsWith(L"qword:")) {
 		type = TYPE::QWORD;
-		*((uint64_t*)data) = wcstoull(&line[6], nullptr, 16);
-		return 8;
+		*((uint64_t*)data.alloc(sizeof(uint64_t))) = wcstoull(&line[6], nullptr, 16);
 
-	} else if (startsWith(line, L"hex")) {
+	} else if (line.startsWith(L"hex")) {
 		auto p = &line[3];
 	 	type = TYPE::BINARY;
 
@@ -470,20 +613,18 @@ size_t parse_reg_data(const std::wstring &line, TYPE &type, BYTE *data) {
 		if (p[0] == ':')
 			p++;
 
-		auto d = data;
 		for (;;) {
 			wchar_t	*p2;
 			auto v = wcstoul(p, &p2, 16);
 			if (p == p2)
 				break;
-			*d++	= v;
+			*data.alloc(1) = v;
 			p 		= p2;
 			if (*p == ',')
 				++p;
 		}
-		return d - data;
 	}
-	return 0;
+	return data;
 }
 
 //-----------------------------------------------------------------------------
@@ -521,7 +662,7 @@ struct RegKey {
 		}
 	};
 	struct Value {
-		std::wstring	name;
+		string	name;
 		TYPE	type	= TYPE::NONE;
 		DWORD 	size	= 0;
 
@@ -536,7 +677,7 @@ struct RegKey {
 	RegKey(RegKey &&b) 			: h(b.h) { b.h = nullptr; }
 	RegKey(const wchar_t *k, REGSAM sam = KEY_READ) {
 		auto	subkey	= wcschr(k, '\\');
-		auto 	hive	= get_hive(subkey ? std::wstring(k, subkey - k) : k);
+		auto 	hive	= get_hive(subkey ? string(k, subkey - k) : string(k));
 		auto 	ret = ::RegOpenKeyEx(hive_to_hkey(hive), subkey + !!subkey, 0, sam, &h);
 		if (ret != ERROR_SUCCESS)
 			h = nullptr;
@@ -548,10 +689,10 @@ struct RegKey {
 	}
 	~RegKey() { if (h) ::RegCloseKey(h); }
 
-	RegKey& operator=(RegKey &&b) { std::swap(h, b.h); return *this; }
+	RegKey& operator=(RegKey &&b) { swap(h, b.h); return *this; }
 
-	explicit operator bool()	const { return h != nullptr; }
-	auto info() 				const { return Info(h); }
+	operator HKEY()		const { return h; }
+	auto info() 		const { return Info(h); }
 
 	auto value(int i, BYTE *data, DWORD data_size) const {
 		wchar_t	name[MAX_VALUE_NAME];
@@ -579,7 +720,7 @@ struct RegKey {
 			NULL, NULL,	//class
 			NULL//&ftLastWriteTime
 		);
-		return ret == ERROR_SUCCESS ? std::wstring(name) : std::wstring();
+		return ret == ERROR_SUCCESS ? string(name) : string();
 	}
 
 	auto set_value(const wchar_t *name, TYPE type, BYTE *data, DWORD size) {
@@ -596,43 +737,50 @@ struct RegKey {
 //-----------------------------------------------------------------------------
 
 struct ParsedKey {
-	std::wstring	host;
-	HIVE			hive;
-	const wchar_t	*subkey;
+	string	host;
+	HIVE	hive;
+	string	subkey;
 
-	ParsedKey(const wchar_t *k) {
-		if (k[0] == '\\' && k[1] == '\\') {
-			auto k0 = k + 2;
-			k = wcschr(k + 2, '\\') + 1;
-			host = std::wstring(k0, k - 1);
+	ParsedKey(string::view k) {
+		auto p = k.begin();
+		if (p[0] == '\\' && p[1] == '\\') {
+			auto a = p + 2;
+			p 		= wcschr(a, '\\');
+			host	= string(a, p++);
 		}
 
-		subkey	= wcschr(k, '\\');
-		hive	= get_hive(toupper(subkey ? std::wstring(k, subkey - k) : k));
+		auto a	= p;
+		p		= wcschr(p, '\\');
+		if (p)
+			subkey = string(p + 1, k.end());
+		else
+			p = k.end();
+
+		hive	= get_hive(string(a, p).toupper());
 	}
 
 	HKEY get_rootkey() {
 		auto h = hive_to_hkey(hive);
 		if (!host.empty()) {
-			auto ret = RegConnectRegistry(host.c_str(), h, &h);
+			auto ret = RegConnectRegistry(host, h, &h);
 			if (ret != ERROR_SUCCESS)
 				return nullptr;
 		}
 		return h;
 	}
 	auto get_keyname() {
-		std::wstring	key = hives[(int)hive][0];
-		return subkey ? key + subkey : key;
+		string	key = hives[(int)hive][0];
+		return subkey ? key + L'\\' + subkey : key;
 	}
 
 	auto open_key(REGSAM sam, HKEY *h) {
-		return RegOpenKeyEx(get_rootkey(), subkey + !!subkey, 0, sam, h);
+		return RegOpenKeyEx(get_rootkey(), subkey, 0, sam, h);
 	}
 	auto delete_key(REGSAM sam) {
-		return RegDeleteKeyEx(get_rootkey(), subkey + !!subkey, sam, 0);
+		return RegDeleteKeyEx(get_rootkey(), subkey, sam, 0);
 	}
 	auto create_key(REGSAM sam, HKEY *h) {
-		return RegCreateKeyEx(get_rootkey(), subkey + !!subkey, 0, NULL, REG_OPTION_NON_VOLATILE, sam, NULL, h, NULL);
+		return RegCreateKeyEx(get_rootkey(), subkey, 0, NULL, REG_OPTION_NON_VOLATILE, sam, NULL, h, NULL);
 	}
 };
 
@@ -645,7 +793,7 @@ struct Reg {
 	};
 
 	union {
-		uint32_t	bool_args;
+		uint32_t	bool_args	= 0;
 		struct {
 			bool all_subkeys 		: 1;
 			bool all_values 		: 1;
@@ -660,15 +808,30 @@ struct Reg {
 			bool view64 			: 1;
 		};
 	};
+	bool	values_only	= false;
+	TYPE	types_only	= TYPE::NUM;
+	wchar_t separator	= L'\0';
 
 	REGSAM	get_sam() const {
 		REGSAM	sam = 0;
 		if (view32)
 			sam |= KEY_WOW64_32KEY;
 		else if (view64)
-			sam |= KEY_WOW64_32KEY;
+			sam |= KEY_WOW64_64KEY;
 		return sam;
 	}
+
+	bool check_value(const string &name) {
+		return !value || !value[0] || wildcard_check((case_sensitive ? name : name.tolower()), value, true);
+	}
+	bool check_data(const string &name) {
+		return exact
+			? (case_sensitive ? name : name.tolower()) == data
+			: wildcard_check((case_sensitive ? name : name.tolower()), data);
+
+	}
+	void query(const RegKey &r, string keyname, bool print_key);
+
 
 	int doQUERY();
 	int doADD();
@@ -678,11 +841,80 @@ struct Reg {
 //	int doCOPY()	{ return 0; }
 //	int doSAVE()	{ return 0; }
 //	int doRESTORE() { return 0; }
-//	int doLOAD()	{ return 0; }
-//	int doUNLOAD()	{ return 0; }
+	int doLOAD();
+	int doUNLOAD();
 //	int doCOMPARE() { return 0; }
 //	int doFLAGS()	{ return 0; }
 };
+
+//-----------------------------------------------------------------------------
+// query
+//-----------------------------------------------------------------------------
+
+void Reg::query(const RegKey &r, string keyname, bool printed_key) {
+	auto info 		= r.info();
+	auto tab		= L"    ";
+	auto space		= (BYTE*)malloc(info.max_data + 1);
+
+	// Enumerate the values
+	if (!data || data_only || values_only) {
+		for (int i = 0; i < info.num_values; i++) {
+			if (auto value = r.value(i, space, info.max_data)) {
+				if (!check_value(value.name))
+					continue;
+
+				if (types_only != TYPE::NUM && value.type != types_only)
+					continue;
+
+				bool values_pass	= !values_only || check_data(value.name);
+
+				string	data_string;
+				if (data_only || values_pass) {
+					StringBuilder	b(data_string);
+					write_command_data(b, space, value.size, value.type, sep);
+				}
+
+				bool data_pass		= !data_only || check_data(data_string);
+				
+				if (values_only && data_only ? values_pass || data_pass : values_pass && data_pass) {
+					if (!printed_key) {
+						out << keyname << endl;
+						printed_key = true;
+					}
+
+					out << tab;
+					if (value.name.length())
+						out << value.name;
+					else
+						out << L"(Default)";
+					out << tab << types[value.type < TYPE::NUM ? (int)value.type : 0];
+
+					if (numeric_type)
+						out << L" (" << (int)value.type << L')';
+
+					out << tab << data_string << endl;
+				}
+			}
+		}
+
+		if (printed_key)
+			out << endl;
+	}
+
+	free(space);
+
+	// Enumerate the subkeys
+	for (int i = 0; i < info.num_subkeys; i++) {
+		auto name = r.subkey(i);
+		if (name.length()) {
+			auto check = !keys_only || check_data(name);
+			if (check)
+				out << keyname << L'\\' << name << endl;
+			if (all_subkeys)
+				query(RegKey(r, name), keyname + L"\\" + name, check);
+		}
+	}
+}
 
 int Reg::doQUERY() {
 	ParsedKey	parsed(key);
@@ -690,51 +922,34 @@ int Reg::doQUERY() {
 	if (auto ret = parsed.open_key(KEY_READ | get_sam(), &h))
 		return ret;
 
-	wchar_t separator = L'\0';
-	if (sep) {
-		if (unescape(sep, sep) != 1)
-			return ERROR_INVALID_FUNCTION;//bad sep
-		separator = sep[0];
-	}
-
-	RegKey	r(h);
-	auto info 		= r.info();
-	auto keyname	= parsed.get_keyname();
-	auto tab		= "	";
-	auto data		= (BYTE*)malloc(info.max_data + 1);
-
-	out << keyname << endl;
-
-	// Enumerate the values
-	for (int i = 0; i < info.num_values; i++) {
-		if (auto value = r.value(i, data, info.max_data)) {
-			out << tab;
-			if (value.name.length())
-				out << value.name;
-			else
-				out << "(Default)";
-			out << tab << types[value.type < TYPE::NUM ? (int)value.type : 0];
-
-			if (numeric_type)
-				out << " (" << (int)value.type << ')';
-
-			out << tab;
-			write_command_data(data, value.size, value.type, separator);
+	if (!case_sensitive) {
+		if (data) {
+			for (auto p = data; *p; ++p)
+				*p = tolower(*p);
+		}
+		if (value) {
+			for (auto p = value; *p; ++p)
+				*p = tolower(*p);
 		}
 	}
 
-	out << endl;
+	if (!sep)
+		sep = (wchar_t*)L"\\0";
 
-	// Enumerate the subkeys
-	for (int i = 0; i < info.num_subkeys; i++) {
-		auto name = r.subkey(i);
-		if (name.length())
-			out << keyname << '\\' << name << endl;
-	}
+	values_only = value && !*value;
+	if (data && !values_only && !data_only && !keys_only)
+		data_only = keys_only = values_only = true;	//now they mean 'as well'
 
-	free(data);
+
+	types_only = type ? get_type(type) : TYPE::NUM;
+
+	query(RegKey(h), parsed.get_keyname(), false);
 	return 0;
 }
+
+//-----------------------------------------------------------------------------
+// add
+//-----------------------------------------------------------------------------
 
 int Reg::doADD() {
 	ParsedKey	parsed(key);
@@ -750,7 +965,7 @@ int Reg::doADD() {
 		if (unescape(sep, sep) != 1)
 			return ERROR_INVALID_FUNCTION;//bad sep
 		separator = sep[0];
-	}
+	}{}
 
 	TYPE	itype = get_type(type);
 	if (itype == TYPE::NUM)
@@ -760,6 +975,10 @@ int Reg::doADD() {
 	RegKey	r(h);
 	return r.set_value(value, itype, (BYTE*)data, size);
 }
+
+//-----------------------------------------------------------------------------
+// delete
+//-----------------------------------------------------------------------------
 
 int Reg::doDELETE() {
 	ParsedKey	parsed(key);
@@ -778,7 +997,7 @@ int Reg::doDELETE() {
 		auto 	info	= r.info();
 		for (int i = 0; i < info.num_values; i++) {
 			if (auto value = r.value(i, nullptr, 0)) {
-				if (auto ret = r.remove_value(value.name.c_str()))
+				if (auto ret = r.remove_value(value.name))
 					return ret;
 			}
 		}
@@ -788,24 +1007,29 @@ int Reg::doDELETE() {
 	return r.remove_value(value);
 }
 
-auto& win_getline(std::wifstream &stream, std::wstring &line) {
-	auto &result = getline(stream, line);
+//-----------------------------------------------------------------------------
+// import
+//-----------------------------------------------------------------------------
+
+auto win_getline(FileReader &reader) {
+	auto line = string::read_to(reader, '\n');
 	if (line.back() == '\r')
 		line.pop_back();
-	return result;
+	return line;
 }
 
 int Reg::doIMPORT() {
-	std::wifstream stream(file);
-	if (!stream) {
-		out << "Failed to open file: " << file << endl;
+	FileReader	reader(file);
+	if (!reader) {
+		out << L"Failed to open file: " << file << endl;
 		return errno;
 	}
 
-	stream.imbue(std::locale(std::locale(), new std::codecvt_utf16<wchar_t, 0x10FFFF, std::consume_header>));
+//	stream.imbue(std::locale(std::locale(), new std::codecvt_utf16<wchar_t, 0x10FFFF, std::consume_header>));
 
-	std::wstring line, line2;
-	if (!win_getline(stream, line) || line != L"Windows Registry Editor Version 5.00")
+	string line, line2;
+	line = win_getline(reader);
+	if (line != L"Windows Registry Editor Version 5.00")
 		return 1;
 
 	RegKey	key;
@@ -814,19 +1038,26 @@ int Reg::doIMPORT() {
 	HKEY	h;
 
 	// Parse key values and subkeys
-	while (win_getline(stream, line)) {
-		line = trim(line);
+	while ((line = win_getline(reader))) {
+		line = line.trim();
 		if (!line.empty() && line[0] != ';') {
-			while (line.back() == '\\' && win_getline(stream, line2)) {
+			bool	more = line.back() == '\\';
+			if (more) {
 				line.pop_back();
-				line += line2;
+				for (StringBuilder	b(line); more;) {
+					auto line2 = win_getline(reader);
+					more = line2.back() == '\\';
+					if (more)
+						line2.pop_back();
+					b << line2;
+				}
 			}
 
 			if (line[0] == '[') {
 				deleted = line[1] == '-';
 				auto	open	= 1 + deleted;
-				auto	close	= line.find_first_of(']');
-				ParsedKey	parsed(line.substr(open, close - open).c_str());
+				auto	close	= line.find_first(']');
+				ParsedKey	parsed(string::view(line.begin() + open, close));
 
 				if (deleted) {
 					if (auto ret = parsed.delete_key(access))
@@ -839,23 +1070,22 @@ int Reg::doIMPORT() {
 				}
 
 			} else if (!deleted) {
-				BYTE	data[1024];
-				auto 	equals	= line.find_first_of('=');
-				if (equals >= 0) {
-					auto	name 	= trim(line.substr(0, equals));
-					auto	value	= trim(line.substr(equals + 1));
+				auto 	equals	= line.find_first('=');
+				if (equals) {
+					auto	name 	= string::view(line.begin(), equals).trim();
+					auto	value	= string::view(equals + 1).trim();
 
 					if (name[0] == '"' && name.back() == '"')
-						name = name.substr(1, name.length() - 2);
+						name = string::view(name.begin() + 1, name.end() - 1);
 
 					if (value == L"-") {
-						key.remove_value(name.c_str());
+						key.remove_value(string(name));
 
 					} else {
 						TYPE	type;
-						auto	size	= parse_reg_data(value, type, data);
-						if (size > 0) {	//ignore bad data
-							if (auto ret = key.set_value(name.c_str(), type, data, size))
+						auto	data	= parse_reg_data(string(value), type);
+						if (data.size() > 0) {	//ignore bad data
+							if (auto ret = key.set_value(string(name), type, data.a, data.p - data.a))
 								return ret;
 						}
 					}
@@ -867,8 +1097,12 @@ int Reg::doIMPORT() {
 	return 0;
 }
 
-void export_recurse(std::wostream &out, const RegKey &key, std::wstring keyname) {
-	out << '[' << keyname << ']' << endl;
+//-----------------------------------------------------------------------------
+// export
+//-----------------------------------------------------------------------------
+
+void export_recurse(FileWriter &out, const RegKey &key, string keyname) {
+	out << L'[' << keyname << L']' << endl;
 
 	auto info 	= key.info();
 	auto data	= (BYTE*)malloc(info.max_data + 1);
@@ -877,10 +1111,10 @@ void export_recurse(std::wostream &out, const RegKey &key, std::wstring keyname)
 	for (int i = 0; i < info.num_values; i++) {
 		if (auto value = key.value(i, data, info.max_data)) {
 			if (value.name.length())
-				out << '"' << value.name << '"';
+				out << L'"' << value.name << L'"';
 			else
-				out << '@';
-			out << '=';
+				out << L'@';
+			out << L'=';
 
 			write_reg_data(out, data, value.size, value.type);
 		}
@@ -893,21 +1127,22 @@ void export_recurse(std::wostream &out, const RegKey &key, std::wstring keyname)
 	for (int i = 0; i < info.num_subkeys; i++) {
 		auto name = key.subkey(i);
 		if (name.length())
-			export_recurse(out, RegKey(key.h, name.c_str()), keyname + L'\\' + name);
+			export_recurse(out, RegKey(key.h, name), keyname + L'\\' + name);
 	}
 }
 
 int Reg::doEXPORT() {
-	 std::wofstream stream(file, std::ios_base::binary|std::ios_base::out);
+//	 std::wofstream stream(file, std::ios_base::binary|std::ios_base::out);
+	FileWriter	stream(file);
 	if (!stream) {
-		out << "Failed to create file: " << file << endl;
+		out << L"Failed to create file: " << file << endl;
 		return errno;
 	}
 
-    stream.imbue(std::locale(std::locale(), new std::codecvt_utf16<wchar_t, 0x10ffff, std::little_endian>));
+	//stream.imbue(std::locale(std::locale(), new std::codecvt_utf16<wchar_t, 0x10ffff, std::little_endian>));
 
 	stream << L'\xfeff';	//BOM
-	stream << "Windows Registry Editor Version 5.00" << endl << endl;
+	stream << L"Windows Registry Editor Version 5.00" << endl << endl;
 
 	ParsedKey	parsed(key);
 	HKEY h;
@@ -919,49 +1154,71 @@ int Reg::doEXPORT() {
 }
 
 //-----------------------------------------------------------------------------
+// load/unload
+//-----------------------------------------------------------------------------
+
+int Reg::doLOAD()	{
+	ParsedKey	parsed(key);
+#if 0
+	return RegLoadKey(parsed.get_rootkey(), parsed.subkey, file);
+#else
+	HKEY	h;
+	if (auto ret = RegLoadAppKey(file, &h, KEY_ALL_ACCESS | get_sam(), 0, 0))
+		return ret;
+	out << L"Loaded: " << parsed.get_keyname() << L"=" << h << endl;
+	return 0;
+#endif
+}
+
+int Reg::doUNLOAD()	{
+	ParsedKey	parsed(key);
+	return RegUnLoadKey(parsed.get_rootkey(), parsed.subkey);
+}
+
+//-----------------------------------------------------------------------------
 //	main
 //-----------------------------------------------------------------------------
 
 void print_options(OP op) {
-	out << "REG " << ops[(uint8_t)op];
+	out << L"REG " << ops[(uint8_t)op];
 	bool	optional = false;
 	for (auto opt = op_options[(uint8_t)op].opts; opt->desc; ++opt) {
 		if ((opt->opt & OPT::alternative)) {
-			out << " | ";
+			out << L" | ";
 		} else {
 			if (optional)
-				out << ']';
-			out << ' ';
+				out << L']';
+			out << L' ';
 			optional = !!opt->sw;
 			if (optional)
-				out << '[';
+				out << L'[';
 		}
 
 		if (opt->sw) {
-			out << '/' << opt->sw;
+			out << L'/' << opt->sw;
 			if (opt->arg)
-				out << ' ';
+				out << L' ';
 		}
 		if (opt->arg)
 			out << opt->arg;
 	}
 	if (optional)
-		out << ']';
+		out << L']';
 	out << endl;
 
 	for (auto opt = op_options[(uint8_t)op].opts; opt->desc; ++opt) {
-		out << "  ";
+		out << L"  ";
 		if (opt->sw) {
-			out << '/' << opt->sw;
+			out << L'/' << opt->sw;
 		} else if (opt->arg) {
 			out << opt->arg;
 		}
 		auto desc = opt->desc;
 		while (auto p = wcschr(desc, '\n')) {
-			out << '\t' << std::wstring(desc, p + 1);
+			out << L'\t' << string(desc, p + 1);
 			desc = p + 1;
 		}
-		out << '\t' << desc << endl;
+		out << L'\t' << desc << endl;
 	}
 }
 
@@ -971,28 +1228,28 @@ int wmain(int argc, wchar_t* argv[]) {
 #if 0
 	bool forever = true;
 	while (forever) {
-		out << "waiting for attach..." << endl;
+		out << L"waiting for attach..." << endl;
 		Sleep(1000);
 	}
 #endif
 
 	if (argc < 2) {
-		out << "** NOTE: this is an unofficial replacement for REG **" << endl << endl
-			<< "REG Operation [Parameter List]" << endl << endl
-			<< "Operation  [ QUERY | ADD | DELETE | EXPORT | IMPORT]" << endl << endl
-			<< "Returns WINERROR code (e.g ERROR_SUCCESS = 0 on sucess)" << endl << endl
-			<< "For help on a specific operation type:" << endl << endl
-			<< "REG Operation /?" << endl << endl;
+		out << L"** NOTE: this is an unofficial replacement for REG **" << endl << endl
+			<< L"REG Operation [Parameter List]" << endl << endl
+			<< L"Operation  [ QUERY | ADD | DELETE | EXPORT | IMPORT]" << endl << endl
+			<< L"Returns WINERROR code (e.g ERROR_SUCCESS = 0 on sucess)" << endl << endl
+			<< L"For help on a specific operation type:" << endl << endl
+			<< L"REG Operation /?" << endl << endl;
 		return 0;
 	}
 
 	OP op = get_op(argv[1]);
 	if (op == OP::NUM) {
-		out << "Unknown operation: " << argv[1] << endl;
+		out << L"Unknown operation: " << argv[1] << endl;
 		return ERROR_INVALID_FUNCTION;
 	}
 
-	if (wcscmp(argv[2], L"/?") == 0) {
+	if (argv[2] == L"/?"_s) {
 		print_options(op);
 		return 0;
 	}
@@ -1000,7 +1257,7 @@ int wmain(int argc, wchar_t* argv[]) {
 	Reg reg;
 	auto err = get_options(op_options[(uint8_t)op].opts, argc - 2, argv + 2, reg.string_args, reg.bool_args);
 	if (err) {
-		out << "Unknown option: " << err << endl;
+		out << L"Unknown option: " << err << endl;
 		return ERROR_INVALID_FUNCTION;
 	}
 
@@ -1014,8 +1271,8 @@ int wmain(int argc, wchar_t* argv[]) {
 	//	case OP::COPY: 		r = reg.doCOPY();	break;
 	//	case OP::SAVE: 		r = reg.doSAVE();	break;
 	//	case OP::RESTORE: 	r = reg.doRESTORE();break;
-	//	case OP::LOAD: 		r = reg.doLOAD();	break;
-	//	case OP::UNLOAD: 	r = reg.doUNLOAD(); break;
+		case OP::LOAD: 		r = reg.doLOAD();	break;
+		case OP::UNLOAD: 	r = reg.doUNLOAD(); break;
 	//	case OP::COMPARE: 	r = reg.doCOMPARE();break;
 	//	case OP::FLAGS: 	r = reg.doFLAGS();	break;
 		default: break;
@@ -1024,14 +1281,18 @@ int wmain(int argc, wchar_t* argv[]) {
 		case ERROR_SUCCESS:
 			break;
 		case ERROR_FILE_NOT_FOUND:
-			out << "ERROR: File not found" << endl;
+			out << L"ERROR: File not found" << endl;
 			break;
 		case ERROR_ACCESS_DENIED:
-			out << "ERROR: Access denied" << endl;
+			out << L"ERROR: Access denied" << endl;
 			break;
-		default:
-			out << "ERROR: " << r << endl;
+		default: {
+			out << L"ERROR " << r << L": ";
+			wchar_t *buffer;
+			FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM|FORMAT_MESSAGE_ALLOCATE_BUFFER, nullptr, r, 0, (LPWSTR)&buffer, 0, nullptr);
+			out << buffer << endl;
 			break;
+		}
 	}
 	return r;
 }
