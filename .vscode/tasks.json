@@ -75,7 +75,7 @@
         {
             "type": "shell",
             "label": "prepublish",
-            "command": "git add . & npm version patch --force",
+            "command": "git add . & npm version minor --force",
             "problemMatcher": [],
             "dependsOn": [
                 "npm: compile",
