@@ -8,6 +8,11 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 - Release 1
 
+## [0.5.0]
+### Added
+- Search
+- qwords that (seem to) represent FILETIMEs are displayed as such
+
 ## [0.4.1]
 ## Fixed
 - reg bugs

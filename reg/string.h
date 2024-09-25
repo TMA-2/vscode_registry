@@ -1,12 +1,13 @@
 #include "text.h"
 #include <memory.h>
 #include <stdlib.h>
+#include <wchar.h>
 
 //-----------------------------------------------------------------------------
 //	string
 //-----------------------------------------------------------------------------
 
-enum class X {};
+enum class XX {};
 
 template<typename C> inline C* string_alloc(int n) {
 	auto p = (C*)malloc((n + 1) * sizeof(C));
@@ -35,8 +36,8 @@ public:
 		friend string operator+(const view &a, wchar_t b);
 	};
 
-	static const X pre_alloc = (X)0;
-	string(wchar_t *p, X)		: p(p) {}
+	static const auto pre_alloc = (XX)0;
+	string(wchar_t *p, XX)		: p(p) {}
 
 	string()	: p(nullptr) {}
 	string(const wchar_t *s, size_t n)			: p(string_alloc<wchar_t>(n)) { copyn(p, s, n); }

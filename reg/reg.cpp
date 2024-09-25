@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <wchar.h>
 
 //static auto& out = std::wcout;
 
@@ -812,6 +813,8 @@ struct Reg {
 	TYPE	types_only	= TYPE::NUM;
 	wchar_t separator	= L'\0';
 
+	int		found_keys	= 0, found_values = 0, found_data = 0;
+
 	REGSAM	get_sam() const {
 		REGSAM	sam = 0;
 		if (view32)
@@ -877,6 +880,9 @@ void Reg::query(const RegKey &r, string keyname, bool printed_key) {
 				bool data_pass		= !data_only || check_data(data_string);
 				
 				if (values_only && data_only ? values_pass || data_pass : values_pass && data_pass) {
+					found_values	+= values_pass;
+					found_data		+= data_pass;
+
 					if (!printed_key) {
 						out << keyname << endl;
 						printed_key = true;
@@ -908,10 +914,12 @@ void Reg::query(const RegKey &r, string keyname, bool printed_key) {
 		auto name = r.subkey(i);
 		if (name.length()) {
 			auto check = !keys_only || check_data(name);
-			if (check)
+			if (check) {
 				out << keyname << L'\\' << name << endl;
+				++found_keys;
+			}
 			if (all_subkeys)
-				query(RegKey(r, name), keyname + L"\\" + name, check);
+				query(RegKey(r, name, KEY_READ | get_sam()), keyname + L"\\" + name, check);
 		}
 	}
 }
@@ -944,6 +952,17 @@ int Reg::doQUERY() {
 	types_only = type ? get_type(type) : TYPE::NUM;
 
 	query(RegKey(h), parsed.get_keyname(), false);
+
+	if (data) {
+		out << L"End of search: ";
+		if (keys_only)
+			out << found_keys << L" key(s)";
+		if (values_only)
+			out << onlyif(keys_only, L", ") << found_values << L" item(s)";
+		if (data_only)
+			out << onlyif(keys_only || values_only, L", ") << found_data << L" values(s)";
+		out << L" found.";
+	}
 	return 0;
 }
 

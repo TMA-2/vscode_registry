@@ -24,10 +24,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/reg/reg.exe",
             "args": [
-				"load", "HKLM\\VS3", "C:\\Users\\adrian\\AppData\\Local\\Microsoft\\VisualStudio\\17.0_f78093fe\\privateregistry.bin"
-				//"query",
-				//"HKEY_LOCAL_MACHINE", "/f", "abc", "/s", "/reg:64"
-				//"/z", "/reg:64"
+				"query", "HKLM", "/s", "/k", "/f", "Microsoft SDKs", "/reg:32",
 			],
             "cwd": "${workspaceFolder}",
 			"sourceFileMap": {

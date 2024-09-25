@@ -5,7 +5,7 @@ const HIVES_SHORT 	= ['HKLM', 'HKU', 'HKCU', 'HKCR', 'HKCC'];
 const HIVES_LONG	= ['HKEY_LOCAL_MACHINE', 'HKEY_USERS', 'HKEY_CURRENT_USER', 'HKEY_CLASSES_ROOT', 'HKEY_CURRENT_CONFIG'];
 const KEY_PATTERN   = /(\\[a-zA-Z0-9_\s]+)*/;
 const PATH_PATTERN	= /^(HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|HKEY_USERS|HKEY_CURRENT_CONFIG).*\\(.*)$/;
-const ITEM_PATTERN  = /^(.*?)\s+(REG_[A-Z_]+)(\s+\((.*?)\))?\s*(.*)$/;
+const ITEM_PATTERN  = /^\s*(.*?)\s+(REG_[A-Z_]+)(\s+\((.*?)\))?\s*(.*)$/;
 
 let		reg_exec = process.platform === 'win32' ? path.join(process.env.windir || '', 'system32', 'reg.exe') : "REG";
 const	hosts32 : Record<string, KeyHost> = {};
@@ -46,17 +46,16 @@ export interface Key extends KeyBase {
 
 
 export interface SearchResults {
-	update: (x: number)=>void;
 	found:	(x: string)=>void;
-	cancelled: boolean;
 }
 
 export interface SearchOptions {
-	recursive: boolean;			//default: true
-	case_sensitive: boolean;	//default: false
-	keys: 	boolean;			//default: true
-	values: boolean;			//default: true
-	data: 	boolean;			//default: true
+	recursive?: 		boolean;	//default: true
+	case_sensitive?:	boolean;	//default: false
+	exact?:				boolean;	//default: false
+	keys?: 				boolean;	//default: true
+	values?:    		boolean;	//default: true
+	data?: 				boolean;	//default: true
 }
 
 function hex_to_bytes(s: string) {
@@ -223,7 +222,12 @@ export function data_to_regstring(value: Data, strict: boolean = false) {
 			if (strict) {
 				const bytes = new Uint8Array(8);
 				new DataView(bytes.buffer).setBigUint64(0, value.value, true);
-				return `hex(11):${bytes_to_hex(bytes)}`;
+				return `hex(b):${bytes_to_hex(bytes)}`;
+			}
+			//interpret as a filetime, after ~1900
+			if (value.value > 300 * 365 * 24 * 3600 * 1e7) {
+				const date = new Date(Number(value.value / 10000n - 11644473600000n));
+				return `time: ${date.toString()}`;
 			}
 			return `qword:${value.value.toString(16)}`;
 
@@ -278,9 +282,9 @@ export function regstring_to_data(value: string) : Data|undefined {
 	}
 }
 
-export function output_to_data(line: string) : [string, Data]|undefined {
-	const match = ITEM_PATTERN.exec(line);
-	if (match) {
+export function parseOutput(line: string) : [string, Data]|string|undefined {
+	let match;
+	if ((match = ITEM_PATTERN.exec(line))) {
 		if (match[4]) {
 			const itype = +match[4].trim();
 			const type	= number_to_type(itype);
@@ -291,31 +295,21 @@ export function output_to_data(line: string) : [string, Data]|undefined {
 				return [match[1].trim(), type.parse(match[5])];
 		}
 	}
+	if ((match = PATH_PATTERN.exec(line)))
+		return match[0];
 }
 
 export class CancellablePromise<T> extends Promise<T> {
-    private reject: (reason?: any) => void;
-    private abort: () => void;
-
+    public cancel: (reason?: any) => void;
     constructor(executor: (
 		resolve: (value: T | PromiseLike<T>) => void,
 		reject: (reason?: any) => void
-	) => () => void) {
-		let _reject: (reason?: any) => void;
+	) => (reason?: any) => void) {
 		let _abort: () => void;
-
 		super((resolve, reject) => {
-			_reject = reject;
 			_abort = executor(resolve, reject);
 		});
-
-		this.reject = _reject!;
-		this.abort	= _abort!;
-	}
-
-	cancel(reason?: any) {
-		this.abort();
-		this.reject(reason);
+		this.cancel	= _abort!;
 	}
 }
 
@@ -524,6 +518,8 @@ export class KeyPromise implements KeyBase {
 			args.push('/s');
 		if (options?.case_sensitive)
 			args.push('/c');
+		if (options?.exact)
+			args.push('/e');
 
 		if (options && (options.keys ?? options.values ?? options.data !== undefined)) {
 			if (options.keys)
@@ -539,22 +535,12 @@ export class KeyPromise implements KeyBase {
 			args.push('/reg:' + view);
 
 		return new CancellablePromise<Process>((resolve, reject) => {
-			//let key		= '';
 			const process = new Process(reg_exec, args, resolve, reject, (line: string) => {
 				results.found(line);
-				/*
-				if (line[0] !== ' ' && line[0] != '\t') {
-					key = line.trim();
-					if (key.includes(pattern))
-						results.found(key);
-				} else {
-					const match = ITEM_PATTERN.exec(line.trim());
-					if (match)
-						results.found(`${key}@${match[1]}`);
-				}*/
 			});
-			return () => {
+			return (reason?: any) => {
 				process.proc.kill();
+				reject(reason);
 			};
 		});
 	}

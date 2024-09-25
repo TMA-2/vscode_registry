@@ -144,18 +144,6 @@
 				"command": "regedit.find",
 				"title": "Find in Key...",
 				"category": "RegEdit"
-			},
-			{
-				"command": "regedit.findNext",
-				"title": "Next found",
-				"icon": "$(arrow-down)",
-				"category": "RegEdit"
-			},
-			{
-				"command": "regedit.findPrev",
-				"title": "Previous found",
-				"icon": "$(arrow-up)",
-				"category": "RegEdit"
 			}
 		],
 		"keybindings": [
@@ -249,16 +237,6 @@
 					"command": "regedit.find",
 					"when": "view == regedit-view && (viewItem == 'key' || viewItem == 'keyWithSearch')",
 					"group": "find"
-				},
-				{
-					"command": "regedit.findNext",
-					"when": "view == regedit-view && viewItem == 'keyWithSearch' && regedit.update != 0",
-					"group": "inline"
-				},
-				{
-					"command": "regedit.findPrev",
-					"when": "view == regedit-view && viewItem == 'keyWithSearch' && regedit.update != 0",
-					"group": "inline"
 				}
 			],
 			"editor/context": [

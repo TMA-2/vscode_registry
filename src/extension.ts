@@ -62,6 +62,54 @@ async function yesno(message: string) {
 	return await vscode.window.showInformationMessage(message, { modal: true }, 'Yes', 'No') === 'Yes';
 }
 
+async function pickFlags(flags: string[], initial: number, placeholder?: string): Promise<number | undefined> {
+	interface item extends vscode.QuickPickItem {
+		index: number;
+	}
+
+    return new Promise<number | undefined>(resolve => {
+		const quickPick = vscode.window.createQuickPick<item>();
+
+		quickPick.placeholder 	= placeholder;
+		quickPick.canSelectMany = true;
+		quickPick.items 		= flags.map((v, i) => ({label: v, index: i, alwaysShow: true, picked: (initial & (1 << i)) !== 0}));
+		quickPick.selectedItems = quickPick.items.filter(i => i.picked);
+
+		quickPick.onDidAccept(async () => {
+			resolve(quickPick.selectedItems.reduce((flags, i) => flags | (1 << i.index), 0));
+		});
+
+		quickPick.onDidHide(() => {
+			quickPick.dispose();
+			resolve(undefined);
+		});
+
+		quickPick.show();
+    });
+}
+
+async function showInputWithBackButton(prompt: string, placeholder?: string): Promise<string | undefined> {
+    return new Promise<string | undefined>(resolve => {
+		const input			= vscode.window.createInputBox();
+		input.prompt 		= prompt;
+		input.placeholder	= placeholder;
+		//input.ignoreFocusOut = true; // Prevent the QuickPick from closing when the editor loses focus
+
+		input.buttons	= [vscode.QuickInputButtons.Back];
+		input.onDidTriggerButton(button => {
+			if (button === vscode.QuickInputButtons.Back)
+				input.hide();
+		});
+
+		input.onDidAccept(() => resolve(input.value));
+		input.onDidHide(() => {
+			input.dispose();
+			resolve(undefined);
+		});
+		input.show();
+	});
+}
+
 class WatchForClose {
 	static editors: [vscode.TextEditor, (editor: vscode.TextEditor)=>void][] = [];
 	static dispose: vscode.Disposable | undefined;
@@ -101,29 +149,39 @@ class RegSearcher implements registry.SearchResults {
 	cancelled	= false;
 
 	constructor(public uri: vscode.Uri, public onChange: vscode.EventEmitter<vscode.Uri>) {
-		this.promise = registry.getKey(uri.path.replace(/\//g, '\\')).search(uri.query, this);
+		const enable = +uri.fragment;
+		this.promise = registry.getKey(uri.path.replace(/\//g, '\\')).search(uri.query, this, {
+			keys: 			(enable & 1) !== 0,
+			values: 		(enable & 2) !== 0,
+			data:   		(enable & 4) !== 0,
+			case_sensitive: (enable & 8) !== 0,
+			exact: 			(enable & 16) !== 0,
+		});
 		this.promise.then(
 			()=> {
+				
 				console.log('search complete');
 				if (!this.cancelled)
-					this.found(";finished");
+					this.found("finished");
 			},
-			error => console.log(`Rejected: ${error}`)
+			error => {
+				console.log(`Rejected: ${error}`);
+				this.found("aborted");
+			}
 		);
 	}
-
-	update() {}
 
 	found(x: string) {
 		if (x.length == 0)
 			return;
 
-		if (x[0] && x[0] != ' ') {
-			x = '\n[' + x + ']';
+		const regitem = registry.parseOutput(x);
+		if (!regitem) {
+			x = ';' + x;
+		} else if (typeof regitem === 'string') {
+			x = '\n[' + regitem + ']';
 		} else {
-			const data = registry.output_to_data(x);
-			if (data)
-				x = `"${data[0]}"=${registry.data_to_regstring(data[1], true)}`;
+			x = `"${regitem[0]}"=${registry.data_to_regstring(regitem[1], true)}`;
 		}
 
 		this.pending.push(x);
@@ -138,7 +196,7 @@ class RegSearcher implements registry.SearchResults {
 				}
 			}, 1000);
 
-		this.text += x + '\n';
+		//this.text += x + '\n';
 	}
 
 	cancel() {
@@ -148,12 +206,9 @@ class RegSearcher implements registry.SearchResults {
 }
 
 class RegSearchTextProvider implements vscode.TextDocumentContentProvider {
-	open: Record<string, RegSearcher> = {};
-
-	constructor() {}
-
 	private _onDidChange = new vscode.EventEmitter<vscode.Uri>();
 	onDidChange = this._onDidChange.event;
+	open: Record<string, RegSearcher> = {};
 
 	provideTextDocumentContent(uri: vscode.Uri): string {
 		const uristring = uri.toString();
@@ -328,101 +383,10 @@ class HostTreeItem extends TreeItem {
 	}
 }
 
-class SearchContext {
-	found: string[][] = [];
-	selected?: string;
-
-	allFound() : string[] {
-		return this.found.flat().sort((a, b) => compare(a, b));
-	}
-
-	next() {
-		if (this.selected != undefined) {
-			const all		= this.allFound();
-			let index		= all.indexOf(this.selected) + 1;
-			if (index >= all.length)
-				index = 0;
-			return this.selected = all[index];
-		}
-	}
-
-	prev() {
-		if (this.selected != undefined) {
-			const all		= this.allFound();
-			let index		= all.indexOf(this.selected);
-			if (index <= 0)
-				index = all.length;
-			return this.selected = all[index - 1];
-		}
-	}
-
-	search(item: KeyTreeItem, tree: RegEditProvider, pattern: string) {
-		return vscode.window.withProgress({
-			location: vscode.ProgressLocation.Notification, // or vscode.ProgressLocation.Window
-			title: `${pattern} in ${item.key.path}`,
-			cancellable: true
-		}, async (progress, token) => {
-			const	found: string[]	= [];
-
-			const prog: registry.SearchResults = {
-				update: x => {
-				},
-				found:	x => {
-					found.push(x);
-					if (x.indexOf('@') < 0)
-						tree.add_found(x);
-					progress.report({increment: 0, message: `found ${found.length}`});
-					if (this.selected == undefined) {
-						item.contextValue = 'keyWithSearch';
-						this.selected = x;
-						tree.selectByName(x);
-					}
-				},
-				cancelled:	false,
-			};
-
-			let dispose = token.onCancellationRequested(() => {
-				prog.cancelled = true;
-			});
-
-			try {
-				this.found.push(found);
-
-				await item.key.search(pattern, prog);
-
-				progress.report({increment: 0, message: `found ${found?.length}, done`});
-				for (;;) {
-					dispose.dispose();
-					if (await new Promise<boolean>(resolve => {
-						setTimeout(() => resolve(false), 1000);
-						dispose = token.onCancellationRequested(() => {
-							resolve(true);
-						});
-					}))
-						break;
-					console.log('waiting...');
-				}
-
-			} catch (err) {
-				vscode.window.showErrorMessage(`${err}`);
-			}
-
-			this.found.splice(this.found.indexOf(found), 1);
-			if (this.found.length == 0) {
-				item.contextValue = 'key';
-				delete tree.searches[item.key.path];
-			}
-			tree.update_searches(item);
-		});
-	}
-}
-
 class RegEditProvider implements vscode.TreeDataProvider<TreeItem>, vscode.FileDecorationProvider {
 	private hosts: 		string[]	= [];
 	private children: 	TreeItem[]	= [];
 	public	selection:	TreeItem[]	= [];
-	private	foundKeys =	new Set<registry.KeyPromise>;
-	public	searches: 	Record<string, SearchContext>	= {};
 
 	private _onDidChangeTreeData = new vscode.EventEmitter<TreeItem | undefined | null | void>();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -452,14 +416,6 @@ class RegEditProvider implements vscode.TreeDataProvider<TreeItem>, vscode.FileD
 		if (element) {
 			if (!element.children) {
 				return element.createChildren().then(children => {
-					for (const i of children) {
-						if (i instanceof KeyTreeItem)
-							if (this.foundKeys.has(i.key)) {
-								i.description	= 'matches';
-								i.resourceUri	= RegFS.value_to_uri(i.key.path, '', 'found');
-							}
-
-					}
 					return element.children = children;
 				}).catch(err => {
 					vscode.window.showInformationMessage(`${err}`);
@@ -554,34 +510,6 @@ class RegEditProvider implements vscode.TreeDataProvider<TreeItem>, vscode.FileD
 		return parts.length == 1
 			? this.selectKey(parts[0])
 			: this.selectValue(parts[0], parts[1]);
-	}
-
-	add_found(key: string) {
-		this.foundKeys.add(registry.getKey(key));
-		const item = this.getKeyItem(key);
-		if (item) {
-			item.description = 'matches';
-			item.resourceUri	= RegFS.value_to_uri(key, '', 'found');
-			this.refresh(item);
-		}
-	}
-
-	search(item: KeyTreeItem, pattern: string) {
-		const path = item.key.path;
-		const ctx = this.searches[path] ?? (this.searches[path] =  new SearchContext);
-		ctx.search(item, this, pattern);
-	}
-	update_searches(item: KeyTreeItem) {
-		this.foundKeys.clear();
-		for (const i of Object.values(this.searches)) {
-			for (const j of i.found) {
-				for (const k of j) {
-					if (k.indexOf('@') < 0)
-						this.foundKeys.add(registry.getKey(k));
-				}
-			}
-		}
-		this.recreate(item.parent);
 	}
 
 	constructor() {
@@ -1023,36 +951,30 @@ export function activate(context: vscode.ExtensionContext) {
 		copy(item, true);
 	});
 
-	registerCommand("regedit.find1", async (item: string|KeyTreeItem, pattern?: string) => {
-		if (!pattern && !(pattern = await vscode.window.showInputBox({prompt: 'Enter the value to find'})))
-			return;
+	let prevSearchFlags = 7;
+	let prevSearchText = '';
+	registerCommand("regedit.find",	async (item?: KeyTreeItem, pattern?: string, searchFlags?: number) => {
+		for (;;) {
+			if (!searchFlags && !(searchFlags = await pickFlags(["Keys", "Value", "Data", "Case Sensitive", "Exact"], prevSearchFlags, "Select search flags")))
+				return;
 
-		if (item instanceof KeyTreeItem) {
-			regedit.search(item, pattern);
+			prevSearchFlags = searchFlags;
+			//if (!pattern && !(pattern = await vscode.window.showInputBox({prompt: 'Enter the value to find'})))
+			if (pattern || (pattern = await showInputWithBackButton('Enter the value to find', prevSearchText))) {
+				prevSearchText = pattern;
+				break;
+			}
 
-		} else {
-			const key	= registry.getKey(item);
-			const found: string[] = [];
-			const prog: registry.SearchResults = {
-				update: x => {},
-				found:	x => found.push(x),
-				cancelled:	false,
-			};
-			await key.search(pattern, prog);
-			return found;
+			searchFlags = undefined;
+			pattern = undefined;
 		}
-	});
-
-	registerCommand("regedit.find",	async (item?: KeyTreeItem, pattern?: string) => {
-		if (!pattern && !(pattern = await vscode.window.showInputBox({prompt: 'Enter the value to find'})))
-			return;
 
 		if (item instanceof KeyTreeItem) {
-
 			const doc = await vscode.workspace.openTextDocument(vscode.Uri.from({
 				scheme: 'regsearch',
 				path: item.key.path.replace(/\\/g,'/'),
-				query: pattern
+				query: pattern,
+				fragment: searchFlags.toString()
 			}));
 			vscode.languages.setTextDocumentLanguage(doc, 'reg');
 			const editor = await vscode.window.showTextDocument(doc, { preview: false });
@@ -1099,18 +1021,6 @@ export function activate(context: vscode.ExtensionContext) {
 			flushPending();
 */
 		}
-	});
-
-	registerCommand("regedit.findNext", (item: KeyTreeItem) => {
-		const next = regedit.searches[item.key.path]?.next();
-		if (next)
-			regedit.selectByName(next);
-	});
-
-	registerCommand("regedit.findPrev", (item: KeyTreeItem) => {
-		const prev = regedit.searches[item.key.path]?.prev();
-		if (prev)
-			regedit.selectByName(prev);
 	});
 
 	registerTextEditorCommand("regedit.viewInReg", async editor => {
