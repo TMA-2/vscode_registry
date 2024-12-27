@@ -21,16 +21,25 @@
 	"files": [
 		"out/*",
 		"assets/*",
+		"!assets/*.psd",
 		"language/*",
 		"reg/reg.cpp",
 		"reg/reg.exe",
-		"LICENSE.txt",
-		"CHANGELOG.md"
+		"LICENSE.txt"
 	],
 	"main": "./out/extension.js",
 	"contributes": {
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "regedit-container",
+					"title": "Registry",
+					"icon": "assets/Registry.svg"
+				}
+			]
+		},
 		"views": {
-			"explorer": [
+			"regedit-container": [
 				{
 					"id": "regedit-view",
 					"name": "Registry"

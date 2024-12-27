@@ -74,6 +74,11 @@
         "ratio": "cpp",
         "stop_token": "cpp",
         "thread": "cpp",
-        "xhash": "cpp"
-    }
+        "xhash": "cpp",
+        "functional": "cpp",
+        "cstdarg": "cpp",
+        "mutex": "cpp",
+        "unordered_set": "cpp"
+    },
+    "svg.preview.background": "transparent"
 }

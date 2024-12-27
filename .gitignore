@@ -6,3 +6,4 @@ hidden
 .vs
 **/*.ilk
 **/*.pdb
+.vscode/ipch/

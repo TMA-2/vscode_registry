@@ -1,111 +1,109 @@
 {
-    "scopeName": "source.reg",
-    "patterns": [
-        {
-            "name": "keyword.control.import.reg",
-            "match": "Windows Registry Editor Version 5\\.00|REGEDIT4"
-        },
-        {
-            "include": "#comments"
-        },
-        {
-            "include": "#keys"
-        }
-    ],
-    "repository": {
-        "comments": {
-            "patterns": [
-                {
-                    "name": "comment.line.reg",
-                    "match": ";.*$"
-                }
-            ]
-        },
-        "keys": {
-            "patterns": [
-                {
-                    "begin": "\\[(HKEY_CLASSES_ROOT|HKEY_CURRENT_USER|HKEY_LOCAL_MACHINE|HKEY_USERS|HKEY_CURRENT_CONFIG)(\\\\.*)*\\]",
-                    "end": "^$",
-                    "name": "keyword.control.reg",
-                    "patterns": [
-                        {"include": "#values"},
-                        {"include": "#comments"}
-                     ]
-                 },
-                {
-                    "begin": "\\[-(HKEY_CLASSES_ROOT|HKEY_CURRENT_USER|HKEY_LOCAL_MACHINE|HKEY_USERS|HKEY_CURRENT_CONFIG)(\\\\.*)*\\]",
-                    "end": "^$",
-                    "name": "keyword.deprecated.reg"
-                }
-            ]
-        },
-        "values": {
-            "patterns": [
-                {
-                    "match": "^(.*?)=\\s*-",
-                    "name": "keyword.deprecated.reg"
-                },
-                {
-                    "begin": "^(.*?)=",
-                    "beginCaptures": {
-                        "1": {
-                            "name": "variable.name.reg"
-                        }
-                    },
-                    "end": "(?<!\\\\)$",
-                    "patterns": [
-                        {
-                            "begin": "\\b(?i)HEX(\\((.*)\\))?:",
-                            "end": "(?<!\\\\)$",
-                            "name": "keyword.reg",
-                            "beginCaptures": {
-                                "2": {"name": "constant.numeric.reg"}
-                            },
-                            "patterns": [
-                                {"include":"#hex"},
-                                {"include":"#comma"},
-                                {"include":"#continuation"}
-                            ]
-                        },
-                        {
-                            "begin": "\\b(?i)[DQ]WORD:",
-                            "end": "(?<!\\\\)$",
-                            "name": "keyword.reg",
-                            "patterns": [
-                                {"include":"#hex"},
-                                {"include":"#continuation"}
-                            ]
-                        },
-                        {
-                            "begin": "\"",
-                            "end": "\"|(?<!\\\\)$",
-                            "name": "string.quoted.double.reg",
-                            "patterns": [
-                                {
-                                    "match": "\\\\.",
-                                    "name": "constant.character.escape.reg"
-                                },
-                                {"include":"#continuation"}
-                            ]
-                        }
+	"scopeName": "source.reg",
+	"patterns": [
+		{
+			"name": "keyword.control.import.reg",
+			"match": "Windows Registry Editor Version 5\\.00|REGEDIT4"
+		},
+		{	"include": "#comments"	},
+		{	"include": "#keys"		}
+	],
+	 
+
+	"repository": {
+		"comments": {
+			"patterns": [
+				{
+					"name": "comment.line.reg",
+					"match": ";.*$"
+				}
+			]
+		},
+		"keys": {
+			"patterns": [
+				{
+					"begin": "\\[(HKEY_CLASSES_ROOT|HKEY_CURRENT_USER|HKEY_LOCAL_MACHINE|HKEY_USERS|HKEY_CURRENT_CONFIG)(\\\\.*)*\\]",
+					"end": "^$",
+					"name": "keyword.control.reg",
+					"patterns": [
+						{"include": "#values"},
+						{"include": "#comments"}
+					 ]
+				 },
+				{
+					"begin": "\\[-(HKEY_CLASSES_ROOT|HKEY_CURRENT_USER|HKEY_LOCAL_MACHINE|HKEY_USERS|HKEY_CURRENT_CONFIG)(\\\\.*)*\\]",
+					"end": "^$",
+					"name": "keyword.deprecated.reg"
+				}
+			]
+		},
+		"values": {
+			"patterns": [
+				{
+					"match": "^(.*?)=\\s*-",
+					"name": "keyword.deprecated.reg"
+				},
+				{
+					"begin": "^(.*?)=",
+					"beginCaptures": {
+						"1": {
+							"name": "variable.name.reg"
+						}
+					},
+					"end": "(?<!\\\\\\s*)$",
+					"patterns": [
+						{
+							"begin": "\\b(?i)HEX(\\((.*)\\))?:",
+							"end": "(?<!\\\\\\s*)$",
+							"name": "keyword.reg",
+							"beginCaptures": {
+								"2": {"name": "constant.numeric.reg"}
+							},
+							"patterns": [
+								{"include":"#hex"},
+								{"include":"#comma"},
+								{"include":"#continuation"}
+							]
+						},
+						{
+							"begin": "\\b(?i)[DQ]WORD:",
+							"end": "(?<!\\\\\\s*)$",
+							"name": "keyword.reg",
+							"patterns": [
+								{"include":"#hex"},
+								{"include":"#continuation"}
+							]
+						},
+						{
+							"begin": "\"",
+							"end": "\"|(?<!\\\\\\s*)$",
+							"name": "string.quoted.double.reg",
+							"patterns": [
+								{
+									"match": "\\\\.",
+									"name": "constant.character.escape.reg"
+								},
+								{"include":"#continuation"}
+							]
+						}
 
 
-                    ]
-                }
-            ]
-        },
-        "comma": {
-            "name": "punctuation.separator.comma.reg",
-            "match": ","
-        },
-        "hex": {
-            "name": "constant.numeric.hex.reg",
-            "match": "[0-9A-Fa-f]+"
-        },
-        "continuation": {
-            "match": "\\\\\\s*$",
-            "name": "punctuation.separator.continuation.reg"
-        }
+					]
+				}
+			]
+		},
+		"comma": {
+			"name": "punctuation.separator.comma.reg",
+			"match": ","
+		},
+		"hex": {
+			"name": "constant.numeric.hex.reg",
+			"match": "[0-9A-Fa-f]+"
+		},
+		"continuation": {
+			"match": "\\\\\\s*$",
+			"name": "punctuation.separator.continuation.reg"
+		}
 
-    }
+	}
 }

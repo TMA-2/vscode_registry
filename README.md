@@ -1,3 +1,5 @@
+"😀"
+<span data-index="1"></span>
 # Visual Studio Code Registry Editor
 
 This extension adds a registry editor to the explorer, and general support for .reg files.
@@ -38,4 +40,5 @@ Exposes the following commands for inclusion in launch scripts, etc:
 
 ## Author
 Adrian Stephens
+
 

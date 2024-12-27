@@ -16,79 +16,89 @@
 				"isDefault": true
 			}
 		},
-        {
-            "type": "npm",
-            "script": "compile",
-            "problemMatcher": ["$tsc"],
-            "label": "npm: compile"
-        },
 		{
-            "type": "shell",
-            "label": "Build reg.exe",
-            "command": "clang-cl",
-            "args": [
-                "-g",
-                "reg\\reg.cpp",
-                "-DUNICODE", "-D_UNICODE", "-DWIN32_LEAN_AND_MEAN",
-                "-o", "reg\\reg.exe",
-                "/MTd",
-                "/link", "advapi32.lib"
-            ],
-            "problemMatcher": {
-                "owner": "cpp",
+			"type": "npm",
+			"script": "compile",
+			"problemMatcher": ["$tsc"],
+			"label": "npm: compile"
+		},
+		{
+			"type": "shell",
+			"label": "Build reg.exe",
+			"command": "clang-cl",
+			"args": [
+				"-g",
+				"reg\\reg.cpp",
+				"-DUNICODE", "-D_UNICODE", "-DWIN32_LEAN_AND_MEAN",
+				"-o", "reg\\reg.exe",
+				"/MTd",
+				"/link", "advapi32.lib"
+			],
+			"problemMatcher": {
+				"owner": "cpp",
 				"fileLocation": [
 					"relative", "${workspaceFolder}"
 				],
-                "pattern": {
-                    "regexp": "(.*)\\((.*)\\) *: *(warning|error) *: *(.*)",
-                    "file": 1,
-                    "location": 2,
-                    "severity": 3,
-                    "message": 4
-                }
-            },
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
-        },
+				"pattern": {
+					"regexp": "(.*)\\((.*)\\) *: *(warning|error) *: *(.*)",
+					"file": 1,
+					"location": 2,
+					"severity": 3,
+					"message": 4
+				}
+			},
+			"group":  "build",
+		},
+		{
+			"type": "shell",
+			"label": "Build Release reg.exe",
+			"command": "clang-cl",
+			"args": [
+				"reg\\reg.cpp",
+				"-DUNICODE", "-D_UNICODE", "-DWIN32_LEAN_AND_MEAN",
+				"-O2",
+				"-o", "reg\\reg.exe",
+				"/MD",
+				"/link", "advapi32.lib"
+			],
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group":  "build",
+		},
+
+		{
+			"type": "shell",
+			"label": "prepublish",
+			"command": "git add . & if not ${input:version}==none npm version ${input:version} --force",
+			"problemMatcher": [],
+			"dependsOn": [
+				"npm: compile",
+				"Build Release reg.exe"
+			]
+		},
+		{
+			"type": "shell",
+			"label": "PUBLISH",
+			"command": "node E:\\Github\\vscode-vsce\\vsce publish",
+			"problemMatcher": [],
+			"dependsOn": "prepublish"
+		},
         {
             "type": "shell",
-            "label": "Build Release reg.exe",
-            "command": "clang-cl",
-            "args": [
-                "reg\\reg.cpp",
-                "-DUNICODE", "-D_UNICODE", "-DWIN32_LEAN_AND_MEAN",
-                "-O2",
-                "-o", "reg\\reg.exe",
-                "/MD",
-                "/link", "advapi32.lib"
-            ],
-            "problemMatcher": [
-                "$msCompile"
-            ],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
-        },
-        {
-            "type": "shell",
-            "label": "prepublish",
-            "command": "git add . & npm version minor --force",
-            "problemMatcher": [],
-            "dependsOn": [
-                "npm: compile",
-                "Build Release reg.exe"
-            ]
-        },
-        {
-            "type": "shell",
-            "label": "PUBLISH",
-            "command": "vsce publish",
+            "label": "PACKAGE",
+            "command": "node E:\\Github\\vscode-vsce\\vsce package",
             "problemMatcher": [],
             "dependsOn": "prepublish"
         }
-
+	],
+	"inputs": [
+		{
+			"id": "version",
+			"description": "Version bump:",
+			"type": "pickString",
+			"options": ["none", "patch", "minor", "major"],
+			"default": "none"
+		},
 	]
 }

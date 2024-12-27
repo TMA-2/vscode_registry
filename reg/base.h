@@ -1,5 +1,6 @@
 #pragma once
 #include <type_traits>
+#include <initializer_list>
 
 //-----------------------------------------------------------------------------
 //	bare minimum
@@ -18,7 +19,7 @@ template<bool B, typename R = void>			using enable_if_t 	= type_t<T_enable_if<B,
 template<bool B, typename T, typename F>	struct T_if;
 template<typename T, typename F>			struct T_if<true, T, F> 	: T_type<T> {};
 template<typename T, typename F>			struct T_if<false, T, F>	: T_type<F> {};
-template<bool B, typename T, typename F>	using if_t = type_t<T_if<B, T, F>>;
+template<bool B, typename T, typename F>	using if_t			= type_t<T_if<B, T, F>>;
 
 template<typename T, typename R = T> 		struct T_exists : T_type<R> {};
 template<typename T, typename R = T>		using exists_t		= type_t<T_exists<T, R>>;
@@ -35,7 +36,7 @@ template<typename T> struct T_noref					: T_type<T> {};
 template<typename T> struct T_noref<T&>				: T_type<T> {};
 template<typename T> struct T_noref<T&&>			: T_type<T> {};
 template<typename T> using noref_t = type_t<T_noref<T>>;
-template<typename T> noref_t<T>&	declval() noexcept;
+template<typename T> constexpr noref_t<T>&	declval() noexcept;
 
 template<typename T> struct T_deref					: T_type<noref_t<decltype(*declval<T>())>> {};
 template<>			 struct T_deref<void*>			: T_type<void> {};
@@ -43,6 +44,26 @@ template<>			 struct T_deref<const void*>	: T_type<void> {};
 template<typename C, typename T> struct T_deref<T C::*>			: T_type<T> {};
 template<typename C, typename T> struct T_deref<const T C::*>	: T_type<const T> {};
 template<typename T> using deref_t = type_t<T_deref<T>>;
+
+template<typename T> struct remove_const : T_type<T> {};
+template<typename T> struct remove_const<const T>  : T_type<T> {};
+template<typename T> using remove_const_t			= type_t<remove_const<T>>;
+
+
+template<typename...T> struct typelist { static const auto size = sizeof...(T); };
+template<typename...T> using last_t = typename decltype((T_exists<T>{}, ...))::type;
+
+template<typename...T>	struct T_head;
+template<typename ...T>	struct T_head<typelist<T...>> : T_head<T...> {};
+template<typename T0, typename ...T> struct T_head<T0, T...> : T_type<T0> { using tail = typelist<T...>; };
+template<typename...T> using head_t = type_t<T_head<T...>>;
+template<typename...T> using tail_t = typename T_head<T...>::tail;
+
+template<typename L, typename...R> struct T_except_last;
+template<typename...L, typename...R> struct T_except_last<typelist<L...>, typelist<R...>>			: T_except_last<typelist<L...>, R...> {};
+template<typename...L, typename M, typename...R>	struct T_except_last<typelist<L...>, M, R...>	: T_except_last<typelist<L..., M>, R...> {};
+template<typename...L, typename R>					struct T_except_last<typelist<L...>, R>			: T_type<typelist<L...>> {};
+template<typename...T> using except_last_t = typename T_except_last<typelist<>, T...>::type;
 
 struct _none {
 	template<typename T> operator T() const { return T(); }
@@ -102,6 +123,7 @@ template<typename T> struct range {
 	constexpr range(_none)			: range() {}
 	constexpr range(T a, T b)		: a(a), b(b) {}
 	constexpr range(T a, size_t n)	: a(a), b(a + n) {}
+	constexpr range(std::initializer_list<E> list)	: a(list.begin()), b(list.end()) {}
 	template<typename U, enable_if_t<std::is_assignable<T&,U&>::value>* = nullptr> constexpr range(const range<U> &b) : a(b.a), b(b.b) {}
 	constexpr auto	empty()	const	{ return a == b; }
 	constexpr auto	size()	const	{ return size_t(b - a); }
@@ -111,6 +133,7 @@ template<typename T> struct range {
 	constexpr auto&	back()	const	{ return *(b - 1); }
 	constexpr range slice(int i) 		const { return {a + i, b}; }
 	constexpr range slice(int i, int j)	const { return {a + i, min(a + i + j, b)}; }
+	constexpr auto	at(size_t i)		const { return a + i; }
 	constexpr auto&	item(int i) 		const { return *(a + i); }
 	constexpr auto&	operator[](int i) 	const { return *(a + i); }
 	constexpr explicit operator bool() 	const { return !!a; }
@@ -161,3 +184,10 @@ template<typename T> struct dynamic_range : range<T*> {
 		p -= size;
 	}
 };
+
+template<typename T> struct save {
+	T	&t, t0;
+	save(T &t, T t1) : t(t), t0(t) { t = t1;}
+	~save() { t = t0; }
+};
+
